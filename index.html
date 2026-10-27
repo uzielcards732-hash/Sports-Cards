@@ -1,0 +1,1234 @@
+<title>Card Vault</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Big+Shoulders+Display:wght@600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+/* Layout: phone first, one column. From 980px the dashboard (totals, history,
+   attention, movers) sits left and the collection list runs right. */
+:root {
+  --paper: #EDF0F4;
+  --card: #FFFFFF;
+  --ink: #0E1726;
+  --muted: #5A6577;
+  --line: #D5DBE3;
+  --navy: #173469;
+  --navy-ink: #FFFFFF;
+  --label: #C1272D;
+  --gain: #12774A;
+  --loss: #B3261E;
+  --warn: #8A5300;
+  --warn-bg: #FFF3DA;
+  --focus: #2F6BFF;
+  --shadow: 0 1px 2px rgba(14, 23, 38, .06), 0 8px 24px rgba(14, 23, 38, .06);
+  --font-display: "Big Shoulders Display", "Oswald", "Arial Narrow", sans-serif;
+  --font-body: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --font-data: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #0A111E; --card: #121B2C; --ink: #E6EBF2; --muted: #93A0B4; --line: #233049;
+    --navy: #86ABFF; --navy-ink: #0A111E; --label: #FF5C61; --gain: #45D08F; --loss: #FF7B70;
+    --warn: #FFC46B; --warn-bg: #2A2213; --focus: #86ABFF;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 8px 24px rgba(0, 0, 0, .25);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #0A111E; --card: #121B2C; --ink: #E6EBF2; --muted: #93A0B4; --line: #233049;
+  --navy: #86ABFF; --navy-ink: #0A111E; --label: #FF5C61; --gain: #45D08F; --loss: #FF7B70;
+  --warn: #FFC46B; --warn-bg: #2A2213; --focus: #86ABFF;
+  --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 8px 24px rgba(0, 0, 0, .25);
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body {
+  background: var(--paper); color: var(--ink);
+  font: 15px/1.45 var(--font-body);
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 16px 48px;
+}
+button, input, select { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.wrap { max-width: 1180px; margin: 0 auto; display: grid; gap: 18px; }
+
+/* header */
+.top { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 12px; }
+.brand { display: grid; gap: 2px; min-width: 0; }
+.brand h1 { margin: 0; font: 800 34px/0.9 var(--font-display); letter-spacing: .04em; text-transform: uppercase; }
+.brand h1 span { color: var(--label); }
+.status { color: var(--muted); font-size: 13px; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.btn {
+  border: 1px solid var(--line); background: var(--card); border-radius: 8px;
+  padding: 9px 14px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 8px;
+}
+.btn:hover { border-color: var(--muted); }
+.btn.primary { background: var(--navy); border-color: var(--navy); color: var(--navy-ink); }
+.btn.ghost { background: transparent; border-color: transparent; padding-inline: 8px; }
+.btn.small { padding: 6px 10px; font-size: 13px; }
+.btn.danger { color: var(--loss); }
+.btn[disabled] { opacity: .55; cursor: default; }
+
+/* page grid */
+.layout { display: grid; gap: 18px; }
+@media (min-width: 980px) { .layout { grid-template-columns: minmax(0, 400px) minmax(0, 1fr); align-items: start; } }
+.col { display: grid; gap: 18px; min-width: 0; }
+.panel { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; min-width: 0; }
+.eyebrow { font: 700 13px/1 var(--font-display); letter-spacing: .14em; text-transform: uppercase; color: var(--muted); margin: 0 0 12px; display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.eyebrow small { font: 500 12px var(--font-body); letter-spacing: 0; text-transform: none; }
+
+/* totals */
+.totals { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 16px; }
+.fig { display: grid; gap: 2px; min-width: 0; }
+.fig dt { font-size: 12px; color: var(--muted); font-weight: 500; }
+.fig dd { margin: 0; font: 700 30px/1 var(--font-display); letter-spacing: .01em; font-variant-numeric: tabular-nums; }
+.fig.lead { grid-column: 1 / -1; }
+.fig.lead dd { font-size: 46px; }
+.fig .note { font-size: 12px; color: var(--muted); }
+.gain { color: var(--gain); }
+.loss { color: var(--loss); }
+
+/* chart */
+.chart { width: 100%; height: 150px; display: block; }
+.chart text { fill: var(--muted); font: 11px var(--font-data); }
+.legend { display: flex; gap: 14px; font-size: 12px; color: var(--muted); margin-top: 8px; }
+.legend i { display: inline-block; width: 14px; height: 0; border-top: 2px solid var(--navy); vertical-align: middle; margin-right: 6px; }
+.legend i.cost { border-top: 2px dashed var(--muted); }
+.empty-note { color: var(--muted); font-size: 13px; margin: 0; }
+
+/* attention */
+.attn { display: grid; gap: 10px; }
+.attn-item { border: 1px solid var(--line); border-left: 4px solid var(--warn); border-radius: 8px; padding: 10px 12px; display: grid; gap: 8px; background: var(--card); }
+.attn-item .q { font-size: 13px; color: var(--warn); font-weight: 600; }
+.attn-item .t { font-weight: 600; overflow-wrap: anywhere; }
+.choices { display: flex; flex-wrap: wrap; gap: 6px; }
+.choice { text-align: left; border: 1px solid var(--line); background: var(--paper); border-radius: 8px; padding: 7px 10px; cursor: pointer; font-size: 13px; display: grid; gap: 1px; max-width: 100%; }
+.choice:hover { border-color: var(--navy); }
+.choice small { color: var(--muted); }
+
+/* movers */
+.movers { display: grid; gap: 6px; }
+.mover { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: baseline; font-size: 14px; cursor: pointer; background: none; border: 0; padding: 4px 0; text-align: left; }
+.mover span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mover .d { font-family: var(--font-data); font-size: 13px; font-variant-numeric: tabular-nums; }
+
+/* collection */
+.toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+.tabs { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.tabs button { border: 0; background: transparent; padding: 7px 12px; font-weight: 600; font-size: 13px; cursor: pointer; color: var(--muted); }
+.tabs button[aria-pressed="true"] { background: var(--navy); color: var(--navy-ink); }
+.search { flex: 1 1 180px; min-width: 0; border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; background: var(--paper); }
+.sort { border: 1px solid var(--line); border-radius: 8px; padding: 7px 8px; background: var(--paper); }
+.list { display: grid; }
+.row {
+  display: grid; grid-template-columns: 52px minmax(0, 1fr) auto; gap: 12px; align-items: center;
+  padding: 10px 4px; border-top: 1px solid var(--line); cursor: pointer; background: none; border-left: 0; border-right: 0; border-bottom: 0; text-align: left; width: 100%;
+}
+.row:first-child { border-top: 0; }
+.row:hover { background: var(--paper); }
+.thumb { width: 52px; height: 72px; border-radius: 4px; background: var(--paper); border: 1px solid var(--line); overflow: hidden; display: grid; place-items: center; }
+.thumb img { width: 100%; height: 100%; object-fit: cover; }
+.thumb .ph { font: 700 13px var(--font-display); letter-spacing: .08em; color: var(--muted); text-transform: uppercase; }
+.who { min-width: 0; display: grid; gap: 3px; }
+.who b { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.who .sub { color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.chip { font: 600 11px/1 var(--font-body); padding: 3px 6px; border-radius: 4px; border: 1px solid var(--line); color: var(--muted); letter-spacing: .02em; }
+.chip.flag { border-color: var(--warn); color: var(--warn); }
+.slab { display: inline-grid; grid-auto-flow: column; align-items: center; gap: 4px; border: 1px solid var(--label); border-top-width: 3px; border-radius: 3px; padding: 1px 6px 2px; color: var(--label); line-height: 1; }
+.slab b { font: 700 10px var(--font-body); letter-spacing: .08em; }
+.slab i { font: 800 14px var(--font-display); font-style: normal; }
+.money { text-align: right; display: grid; gap: 2px; font-family: var(--font-data); font-variant-numeric: tabular-nums; }
+.money .v { font-size: 15px; font-weight: 600; }
+.money .c { font-size: 12px; color: var(--muted); }
+.empty { padding: 28px 8px; text-align: center; color: var(--muted); display: grid; gap: 12px; justify-items: center; }
+.empty h3 { margin: 0; color: var(--ink); font: 700 22px var(--font-display); letter-spacing: .04em; text-transform: uppercase; }
+.empty p { margin: 0; max-width: 44ch; }
+
+.banner { border: 1px solid var(--warn); background: var(--warn-bg); color: var(--warn); border-radius: 10px; padding: 10px 14px; font-size: 14px; }
+.banner b { color: var(--ink); }
+
+/* drawer */
+.scrim { position: fixed; inset: 0; background: rgba(8, 14, 26, .45); z-index: 20; }
+.drawer {
+  position: fixed; z-index: 21; top: 0; right: 0; bottom: 0; width: min(520px, 100%);
+  background: var(--card); border-left: 1px solid var(--line); box-shadow: var(--shadow);
+  display: grid; grid-template-rows: auto 1fr auto; overflow: hidden;
+  padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); padding-right: env(safe-area-inset-right, 0px);
+}
+.drawer header, .drawer footer { padding: 14px 18px; display: flex; align-items: center; justify-content: space-between; gap: 8px; border-bottom: 1px solid var(--line); }
+.drawer footer { border-top: 1px solid var(--line); border-bottom: 0; flex-wrap: wrap; }
+.drawer h2 { margin: 0; font: 800 22px var(--font-display); letter-spacing: .05em; text-transform: uppercase; }
+.drawer .body { overflow-y: auto; padding: 16px 18px; display: grid; gap: 16px; align-content: start; }
+.photo-pick { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 14px; align-items: center; }
+.photo-pick .thumb { width: 110px; height: 154px; }
+.photo-pick .thumb .ph { font-size: 12px; text-align: center; padding: 6px; }
+.photo-btns { display: grid; gap: 8px; justify-items: start; }
+.idline { font-size: 13px; color: var(--muted); }
+.form { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.form .full { grid-column: 1 / -1; }
+.field { display: grid; gap: 4px; min-width: 0; }
+.field label { font-size: 12px; color: var(--muted); font-weight: 600; }
+.field input, .field select { width: 100%; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--paper); min-width: 0; }
+.field input.mono { font-family: var(--font-data); }
+.checks { display: flex; gap: 16px; align-items: center; }
+.checks label { display: inline-flex; gap: 6px; align-items: center; font-size: 14px; }
+.section-title { font: 700 13px var(--font-display); letter-spacing: .14em; text-transform: uppercase; color: var(--muted); margin: 6px 0 -4px; }
+.guide { font-size: 13px; color: var(--muted); display: grid; gap: 6px; }
+.guide b { color: var(--ink); font-weight: 600; }
+.hist { width: 100%; height: 60px; display: block; }
+
+.toast {
+  position: fixed; z-index: 30; left: 50%; transform: translateX(-50%);
+  bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+  background: var(--ink); color: var(--paper); padding: 10px 16px; border-radius: 10px; font-size: 14px;
+  max-width: calc(100% - 32px); box-shadow: var(--shadow);
+}
+.progress { font-size: 13px; color: var(--muted); }
+@media (max-width: 520px) {
+  .brand h1 { font-size: 30px; }
+  .actions .btn { padding: 8px 11px; font-size: 14px; }
+  .fig.lead dd { font-size: 40px; }
+  .form { grid-template-columns: 1fr; }
+  .row { grid-template-columns: 44px minmax(0, 1fr) auto; gap: 10px; }
+  .thumb { width: 44px; height: 62px; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .drawer { animation: slide .18s ease-out; }
+  @keyframes slide { from { transform: translateX(24px); opacity: .6; } to { transform: none; opacity: 1; } }
+}
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <div class="brand">
+      <h1>Card <span>Vault</span></h1>
+      <div class="status" id="status">Loading your collection</div>
+    </div>
+    <div class="actions">
+      <button class="btn primary" id="btn-add" type="button">Add card</button>
+      <button class="btn" id="btn-sync" type="button" hidden>Sync eBay</button>
+      <button class="btn" id="btn-refresh" type="button" hidden>Update prices</button>
+      <button class="btn" id="btn-export" type="button" hidden>Export CSV</button>
+    </div>
+  </header>
+
+  <div class="banner" id="banner" hidden></div>
+  <div class="progress" id="progress" hidden></div>
+
+  <div class="layout">
+    <div class="col">
+      <section class="panel" aria-labelledby="h-totals">
+        <h2 class="eyebrow" id="h-totals">Collection <small id="as-of"></small></h2>
+        <dl class="totals" id="totals"></dl>
+      </section>
+      <section class="panel" aria-labelledby="h-hist">
+        <h2 class="eyebrow" id="h-hist">Value history</h2>
+        <div id="chart"></div>
+      </section>
+      <section class="panel" id="attn-panel" aria-labelledby="h-attn" hidden>
+        <h2 class="eyebrow" id="h-attn">Needs a tap <small id="attn-count"></small></h2>
+        <div class="attn" id="attn"></div>
+      </section>
+      <section class="panel" id="movers-panel" aria-labelledby="h-movers" hidden>
+        <h2 class="eyebrow" id="h-movers">Movers since last update</h2>
+        <div class="movers" id="movers"></div>
+      </section>
+    </div>
+    <section class="panel" aria-labelledby="h-list">
+      <h2 class="eyebrow" id="h-list">Cards <small id="list-count"></small></h2>
+      <div class="toolbar">
+        <div class="tabs" role="group" aria-label="Show">
+          <button type="button" data-filter="owned" aria-pressed="true">Owned</button>
+          <button type="button" data-filter="sold" aria-pressed="false">Sold</button>
+          <button type="button" data-filter="all" aria-pressed="false">All</button>
+        </div>
+        <input class="search" id="q" type="search" placeholder="Search player, set, year" aria-label="Search cards">
+        <select class="sort" id="sort" aria-label="Sort">
+          <option value="value">Highest value</option>
+          <option value="change">Biggest change</option>
+          <option value="recent">Recently added</option>
+          <option value="pl">Profit and loss</option>
+          <option value="name">Player A to Z</option>
+        </select>
+      </div>
+      <div class="list" id="list"></div>
+    </section>
+  </div>
+</div>
+
+<div class="scrim" id="scrim" hidden></div>
+<aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-labelledby="d-title" hidden>
+  <header>
+    <h2 id="d-title">Add card</h2>
+    <button class="btn ghost" id="d-close" type="button" aria-label="Close">Close</button>
+  </header>
+  <div class="body">
+    <div class="photo-pick">
+      <div class="thumb" id="d-thumb"><span class="ph">No photo</span></div>
+      <div class="photo-btns">
+        <label class="btn" for="f-photo">Take or choose photo</label>
+        <input id="f-photo" type="file" accept="image/*" hidden>
+        <label class="btn small" for="f-photo-back" id="back-label">Add back of card</label>
+        <input id="f-photo-back" type="file" accept="image/*" hidden>
+        <div class="idline" id="id-line">Snap the front. Claude reads the card and fills in the details.</div>
+      </div>
+    </div>
+    <div class="form">
+      <div class="field full"><label for="f-player">Player</label><input id="f-player" autocomplete="off"></div>
+      <div class="field"><label for="f-year">Year</label><input id="f-year" inputmode="numeric" placeholder="2020 or 2001-02" autocomplete="off"></div>
+      <div class="field"><label for="f-number">Card number</label><input id="f-number" placeholder="151" autocomplete="off"></div>
+      <div class="field full"><label for="f-set">Set</label><input id="f-set" placeholder="Panini Donruss Optic" autocomplete="off"></div>
+      <div class="field"><label for="f-parallel">Parallel</label><input id="f-parallel" placeholder="Base, Gold Refractor" autocomplete="off"></div>
+      <div class="field"><label for="f-serial">Serial</label><input id="f-serial" placeholder="/60" autocomplete="off"></div>
+      <div class="field"><label for="f-grader">Grader</label>
+        <select id="f-grader"><option value="">Raw</option><option>PSA</option><option>BGS</option><option>SGC</option><option>CGC</option></select></div>
+      <div class="field"><label for="f-grade">Grade</label><input id="f-grade" inputmode="decimal" placeholder="10"></div>
+      <div class="field full"><label for="f-cert">Cert number</label><input id="f-cert" class="mono" inputmode="numeric" autocomplete="off"></div>
+      <div class="checks full"><label><input type="checkbox" id="f-rc"> Rookie</label><label><input type="checkbox" id="f-auto"> Auto</label></div>
+      <div class="section-title full">Money</div>
+      <div class="field"><label for="f-cost">Paid (all in)</label><input id="f-cost" class="mono" inputmode="decimal" placeholder="$0.00"></div>
+      <div class="field"><label for="f-acquired">Acquired</label><input id="f-acquired" type="date"></div>
+      <div class="field"><label for="f-source">Source</label>
+        <select id="f-source"><option value="show">Card show</option><option value="lcs">Card shop</option><option value="trade">Trade</option><option value="pack">Pulled it</option><option value="ebay">eBay</option><option value="other">Other</option></select></div>
+      <div class="field"><label for="f-status">Status</label>
+        <select id="f-status"><option value="owned">Owned</option><option value="sold">Sold</option><option value="refunded">Refunded</option></select></div>
+      <div class="field" id="sold-a"><label for="f-sold">Sold for</label><input id="f-sold" class="mono" inputmode="decimal" placeholder="$0.00"></div>
+      <div class="field" id="sold-b"><label for="f-sold-at">Sold on</label><input id="f-sold-at" type="date"></div>
+    </div>
+    <div class="guide" id="d-guide" hidden></div>
+  </div>
+  <footer>
+    <button class="btn danger" id="d-delete" type="button" hidden>Delete card</button>
+    <span></span>
+    <button class="btn primary" id="d-save" type="button">Save card</button>
+  </footer>
+</aside>
+<div class="toast" id="toast" role="status" hidden></div>
+
+<script src="ebay-parse.js?v=3"></script>
+<script>
+(function () {
+  "use strict";
+  const P = window.EbayParse;
+  const $ = (s) => document.querySelector(s);
+  const DAY = 864e5;
+
+  // ---------------------------------------------------------------- state
+  const S = {
+    cards: new Map(), snaps: [], sync: null, config: {}, job: null,
+    filter: "owned", q: "", sort: "value",
+    db: null, mcp: null, sample: null, assets: null, downloads: null, perms: null,
+    syncing: false, loaded: false,
+  };
+  try { const f = localStorage.getItem("cv-filter"); if (f) S.filter = f; const so = localStorage.getItem("cv-sort"); if (so) S.sort = so; } catch (e) {}
+
+  // ---------------------------------------------------------------- helpers
+  const el = (tag, attrs, ...kids) => {
+    const n = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs || {})) {
+      if (v == null || v === false) continue;
+      if (k === "class") n.className = v;
+      else if (k === "on") for (const [ev, fn] of Object.entries(v)) n.addEventListener(ev, fn);
+      else if (k === "text") n.textContent = v;
+      else n.setAttribute(k, v === true ? "" : v);
+    }
+    for (const k of kids.flat()) if (k != null && k !== false) n.append(k.nodeType ? k : document.createTextNode(String(k)));
+    return n;
+  };
+  const usd = (c, whole) => {
+    if (c == null) return "";
+    const abs = Math.abs(c) / 100;
+    const dp = whole || abs >= 1000 ? 0 : 2;
+    return (c < 0 ? "−" : "") + "$" + abs.toLocaleString("en-US", { minimumFractionDigits: dp, maximumFractionDigits: dp });
+  };
+  const signed = (c, whole) => (c > 0 ? "+" : "") + usd(c, whole);
+  const pct = (a, b) => (b ? ((a - b) / b) * 100 : null);
+  const toCents = (s) => { const v = String(s || "").replace(/[$,\s]/g, ""); if (!v) return null; const n = parseFloat(v); return isNaN(n) ? null : Math.round(n * 100); };
+  const today = () => new Date().toISOString().slice(0, 10);
+  const nowIso = () => new Date().toISOString();
+  const fmtDate = (d) => { if (!d) return ""; const t = new Date(d.length === 10 ? d + "T12:00:00" : d); return isNaN(t) ? d : t.toLocaleDateString("en-US", { month: "short", day: "numeric", year: t.getFullYear() === new Date().getFullYear() ? undefined : "numeric" }); };
+  const ago = (iso) => { if (!iso) return ""; const m = Math.round((Date.now() - Date.parse(iso)) / 6e4); if (m < 2) return "just now"; if (m < 60) return m + " min ago"; const h = Math.round(m / 60); if (h < 36) return h + "h ago"; return Math.round(h / 24) + " days ago"; };
+  const name = (c) => c.player || c.title || "Untitled card";
+  const subline = (c) => [c.year, c.set, c.parallel, c.number && "#" + c.number, c.serial].filter(Boolean).join(" · ") || (c.player ? c.title : "") || "";
+  const newId = (p) => p + "-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const safeId = (s) => String(s).replace(/[^A-Za-z0-9_\-.~:@+]/g, "-").slice(0, 180);
+
+  let toastTimer;
+  function toast(msg, ms = 3800) {
+    const t = $("#toast"); t.textContent = msg; t.hidden = false;
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.hidden = true), ms);
+  }
+  function progress(msg) { const p = $("#progress"); p.textContent = msg || ""; p.hidden = !msg; }
+
+  // eBay's standard final value fee for trading cards, per order. Editable in
+  // meta/config (fee_pct, fee_fixed_cents). Shown as an estimate.
+  function netOfFees(sold) {
+    if (!sold || sold.gross_cents == null) return null;
+    const pctFee = S.config.fee_pct ?? 13.25;
+    const fixed = S.config.fee_fixed_cents ?? (sold.gross_cents > 1000 ? 40 : 30);
+    const base = sold.gross_cents + (sold.ship_cents || 0);
+    return sold.gross_cents - Math.round((base * pctFee) / 100) - fixed;
+  }
+
+  function totals() {
+    const all = [...S.cards.values()];
+    const owned = all.filter((c) => c.status === "owned");
+    const sold = all.filter((c) => c.status === "sold");
+    const t = { count: owned.length, priced: 0, value: 0, cost: 0, unreal: 0, both: 0, realized: 0, soldKnown: 0, soldUnknown: 0 };
+    for (const c of owned) {
+      if (c.value_cents != null) { t.priced++; t.value += c.value_cents; }
+      if (c.cost_cents != null) t.cost += c.cost_cents;
+      if (c.value_cents != null && c.cost_cents != null) { t.unreal += c.value_cents - c.cost_cents; t.both++; }
+    }
+    for (const c of sold) {
+      const net = netOfFees(c.sold);
+      if (net != null && c.cost_cents != null) { t.realized += net - c.cost_cents; t.soldKnown++; } else t.soldUnknown++;
+    }
+    return t;
+  }
+
+  // ---------------------------------------------------------------- render
+  let raf = 0;
+  const schedule = () => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; render(); }); };
+
+  function render() {
+    renderStatus(); renderTotals(); renderChart(); renderAttention(); renderMovers(); renderList();
+  }
+
+  function renderStatus() {
+    const bits = [];
+    const job = S.job || {};
+    if (job.last_run) bits.push("Values as of " + fmtDate(job.last_run));
+    if (S.sync && S.sync.gmail_last) bits.push("eBay synced " + ago(S.sync.gmail_last));
+    if (!S.db) bits.push(S.loaded ? "Open this page in Claude to load your collection" : "Loading your collection");
+    $("#status").textContent = bits.join(" · ") || (S.loaded ? "Ready" : "Loading your collection");
+
+    const banner = $("#banner");
+    const missing = job.missing_tokens || [];
+    const msg = missing.includes("cardsight_key_missing")
+      ? ["Prices are paused. ", "Add CARDSIGHT_API_KEY to the cloud environment's variables and allow api.cardsight.ai; the next run picks it up."]
+      : missing.includes("cardsight_unauthorized")
+        ? ["Prices are paused. ", "CardSight turned the key down. Check the key, or whether your CardSight plan includes sales data."]
+        : missing.includes("psa_unauthorized")
+          ? ["PSA turned the token down. ", "Prices still update. Generate a new token at psacard.com/publicapi and replace PSA_TOKEN in the cloud environment's variables."]
+          : missing.includes("psa_token_missing")
+            ? ["PSA cert checks are off. ", "Prices still update. Add PSA_TOKEN to the cloud environment's variables to verify slabs and pull pop counts."]
+            : null; // psa_not_approved: nothing to fix on this side, so no banner; each slab links to PSA instead
+    banner.hidden = !msg;
+    if (msg) banner.replaceChildren(el("b", { text: msg[0] }), msg[1]);
+    $("#btn-sync").hidden = !S.mcp;
+    $("#btn-refresh").hidden = !(S.mcp && S.config.trigger_id);
+    $("#btn-export").hidden = !S.downloads || !S.cards.size;
+  }
+
+  function fig(label, value, cls, note, lead) {
+    return el("div", { class: "fig" + (lead ? " lead" : "") }, el("dt", { text: label }), el("dd", { class: cls || null, text: value }), note ? el("span", { class: "note", text: note }) : null);
+  }
+  function renderTotals() {
+    const t = totals();
+    const box = $("#totals");
+    $("#as-of").textContent = t.count ? `${t.count} owned · ${t.priced} priced` : "";
+    box.replaceChildren(
+      fig("Market value", usd(t.value, true), null, t.priced < t.count ? `${t.count - t.priced} card${t.count - t.priced === 1 ? "" : "s"} not priced yet` : "Median of recent sold prices at each card's grade", true),
+      fig("Paid", usd(t.cost, true), null, "Landed cost, owned cards"),
+      fig("Unrealized", signed(t.unreal, true), t.unreal >= 0 ? "gain" : "loss", t.both ? `On ${t.both} cards with both numbers` : "Needs prices and costs"),
+      fig("Realized", t.soldKnown ? signed(t.realized, true) : "n/a", !t.soldKnown ? null : t.realized >= 0 ? "gain" : "loss", t.soldKnown ? `${t.soldKnown} sales, after est. eBay fees` + (t.soldUnknown ? ` · ${t.soldUnknown} without a cost` : "") : (t.soldUnknown ? `${t.soldUnknown} sales without a cost` : "No sales yet")),
+      fig("Sold", String([...S.cards.values()].filter((c) => c.status === "sold").length), null, "All time, from eBay"),
+    );
+  }
+
+  function renderChart() {
+    const box = $("#chart");
+    const pts = S.snaps.filter((s) => s.value_cents != null);
+    if (pts.length < 2) {
+      box.replaceChildren(el("p", { class: "empty-note", text: pts.length ? "One data point so far. The line starts after the next weekly price update." : "History builds from the weekly price update. The first point lands after it runs." }));
+      return;
+    }
+    const W = Math.max(280, box.clientWidth || 360), H = 150, padL = 8, padR = 8, padT = 12, padB = 22;
+    const vals = pts.flatMap((p) => [p.value_cents, p.cost_cents].filter((v) => v != null));
+    let lo = Math.min(...vals), hi = Math.max(...vals);
+    if (hi === lo) { hi += 100; lo = Math.max(0, lo - 100); }
+    const span = hi - lo; lo -= span * 0.08; hi += span * 0.08;
+    const t0 = Date.parse(pts[0].date), t1 = Date.parse(pts[pts.length - 1].date) || t0 + 1;
+    const x = (d) => padL + ((Date.parse(d) - t0) / Math.max(1, t1 - t0)) * (W - padL - padR);
+    const y = (v) => padT + (1 - (v - lo) / (hi - lo)) * (H - padT - padB);
+    const line = (key) => pts.filter((p) => p[key] != null).map((p, i) => (i ? "L" : "M") + x(p.date).toFixed(1) + " " + y(p[key]).toFixed(1)).join(" ");
+    const area = line("value_cents") + ` L${x(pts[pts.length - 1].date).toFixed(1)} ${H - padB} L${x(pts[0].date).toFixed(1)} ${H - padB} Z`;
+    const last = pts[pts.length - 1];
+    const ns = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(ns, "svg");
+    svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.setAttribute("class", "chart"); svg.setAttribute("role", "img");
+    svg.setAttribute("aria-label", `Collection value from ${usd(pts[0].value_cents, true)} on ${fmtDate(pts[0].date)} to ${usd(last.value_cents, true)} on ${fmtDate(last.date)}`);
+    const add = (tag, a) => { const n = document.createElementNS(ns, tag); for (const k in a) n.setAttribute(k, a[k]); svg.append(n); return n; };
+    for (let i = 0; i <= 2; i++) {
+      const gy = padT + (i / 2) * (H - padT - padB);
+      add("line", { x1: padL, x2: W - padR, y1: gy, y2: gy, stroke: "var(--line)", "stroke-width": 1 });
+      if (i !== 1) { const lbl = add("text", { x: padL, y: gy - 3 }); lbl.textContent = usd(Math.round(hi - (i / 2) * (hi - lo)), true); }
+    }
+    add("path", { d: area, fill: "var(--navy)", "fill-opacity": 0.1, stroke: "none" });
+    if (pts.some((p) => p.cost_cents != null)) add("path", { d: line("cost_cents"), fill: "none", stroke: "var(--muted)", "stroke-width": 1.5, "stroke-dasharray": "4 4" });
+    add("path", { d: line("value_cents"), fill: "none", stroke: "var(--navy)", "stroke-width": 2.25, "stroke-linejoin": "round" });
+    add("circle", { cx: x(last.date), cy: y(last.value_cents), r: 4, fill: "var(--navy)", stroke: "var(--card)", "stroke-width": 2 });
+    const tl = add("text", { x: padL, y: H - 6 }); tl.textContent = fmtDate(pts[0].date);
+    const tr = add("text", { x: W - padR, y: H - 6, "text-anchor": "end" }); tr.textContent = fmtDate(last.date);
+    box.replaceChildren(svg, el("div", { class: "legend" }, el("span", {}, el("i"), "Market value"), el("span", {}, el("i", { class: "cost" }), "Paid")));
+  }
+
+  function renderAttention() {
+    const items = [];
+    const cards = [...S.cards.values()];
+    for (const c of cards.filter((c) => c.needs_review)) items.push(reviewItem(c));
+    for (const sk of (S.sync && S.sync.skipped) || []) items.push(skippedItem(sk));
+    $("#attn-panel").hidden = !items.length;
+    $("#attn-count").textContent = items.length ? String(items.length) : "";
+    $("#attn").replaceChildren(...items.slice(0, 30));
+  }
+
+  function reviewItem(c) {
+    const box = el("div", { class: "attn-item" });
+    const reason = c.review_reason || "Check this card";
+    box.append(el("div", { class: "q", text: reason }), el("div", { class: "t", text: c.title || name(c) }));
+    const choices = el("div", { class: "choices" });
+    if (Array.isArray(c.guide_candidates) && c.guide_candidates.length) {
+      for (const k of c.guide_candidates) {
+        choices.append(el("button", { class: "choice", type: "button", on: { click: () => pickGuide(c, k) } }, el("span", { text: (k.name || "Unnamed") + (k.number ? " #" + k.number : "") }), el("small", { text: k.set || "" })));
+      }
+      choices.append(el("button", { class: "btn small ghost", type: "button", text: "None of these", on: { click: () => noGuide(c) } }));
+    } else if (Array.isArray(c.parallel_options) && c.parallel_options.length) {
+      for (const opt of c.parallel_options) {
+        choices.append(el("button", { class: "choice", type: "button", on: { click: () => pickParallel(c, opt) } }, el("span", { text: opt })));
+      }
+      choices.append(el("button", { class: "btn small ghost", type: "button", text: "Open card", on: { click: () => openCard(c) } }));
+    } else if (Array.isArray(c.sale_candidates) && c.sale_candidates.length) {
+      for (const k of c.sale_candidates) {
+        const o = S.cards.get(k.id);
+        if (!o) continue;
+        choices.append(el("button", { class: "choice", type: "button", on: { click: () => mergeSale(c, o) } }, el("span", { text: name(o) }), el("small", { text: subline(o) })));
+      }
+      choices.append(el("button", { class: "btn small ghost", type: "button", text: "Not in my list", on: { click: () => clearReview(c, { sale_candidates: null }) } }));
+    } else {
+      choices.append(el("button", { class: "btn small", type: "button", text: "Open", on: { click: () => openCard(c) } }));
+      choices.append(el("button", { class: "btn small ghost", type: "button", text: "Looks right", on: { click: () => clearReview(c) } }));
+    }
+    box.append(choices);
+    return box;
+  }
+
+  function skippedItem(sk) {
+    return el("div", { class: "attn-item" },
+      el("div", { class: "q", text: "eBay purchase skipped as not a card" }),
+      el("div", { class: "t", text: sk.title }),
+      el("div", { class: "choices" },
+        el("button", { class: "btn small", type: "button", text: "It's a card", on: { click: () => unskip(sk, true) } }),
+        el("button", { class: "btn small ghost", type: "button", text: "Not a card", on: { click: () => unskip(sk, false) } })));
+  }
+
+  function renderMovers() {
+    const rows = [...S.cards.values()].filter((c) => c.status === "owned" && c.value_cents != null && c.value_prev_cents && c.value_cents !== c.value_prev_cents)
+      .map((c) => ({ c, d: c.value_cents - c.value_prev_cents, p: pct(c.value_cents, c.value_prev_cents) }))
+      .sort((a, b) => Math.abs(b.d) - Math.abs(a.d)).slice(0, 6);
+    $("#movers-panel").hidden = !rows.length;
+    $("#movers").replaceChildren(...rows.map(({ c, d, p }) =>
+      el("button", { class: "mover", type: "button", on: { click: () => openCard(c) } },
+        el("span", { text: name(c) + (c.grader ? ` ${c.grader} ${c.grade ?? ""}` : "") }),
+        el("span", { class: "d " + (d > 0 ? "gain" : "loss"), text: `${signed(d)} (${p > 0 ? "+" : ""}${p.toFixed(0)}%)` }))));
+  }
+
+  function gradeChip(c) {
+    if (c.grader && c.grade != null) return el("span", { class: "slab", title: c.cert ? `Cert ${c.cert}` : null }, el("b", { text: c.grader }), el("i", { text: String(c.grade) }));
+    return el("span", { class: "chip", text: "RAW" });
+  }
+
+  function renderList() {
+    const q = S.q.trim().toLowerCase();
+    let rows = [...S.cards.values()].filter((c) => (S.filter === "all" ? c.status !== "refunded" : c.status === S.filter));
+    if (q) rows = rows.filter((c) => [c.title, c.player, c.set, c.year, c.parallel, c.number, c.cert].filter(Boolean).join(" ").toLowerCase().includes(q));
+    const pl = (c) => (c.status === "sold" ? (netOfFees(c.sold) ?? 0) : (c.value_cents ?? 0)) - (c.cost_cents ?? 0);
+    const sorters = {
+      value: (a, b) => (b.status === "sold" ? b.sold?.gross_cents ?? 0 : b.value_cents ?? -1) - (a.status === "sold" ? a.sold?.gross_cents ?? 0 : a.value_cents ?? -1),
+      change: (a, b) => Math.abs((b.value_cents ?? 0) - (b.value_prev_cents ?? b.value_cents ?? 0)) - Math.abs((a.value_cents ?? 0) - (a.value_prev_cents ?? a.value_cents ?? 0)),
+      recent: (a, b) => String(b.acquired_at || b.created_at || "").localeCompare(String(a.acquired_at || a.created_at || "")),
+      pl: (a, b) => pl(b) - pl(a),
+      name: (a, b) => name(a).localeCompare(name(b)),
+    };
+    rows.sort(sorters[S.sort] || sorters.value);
+    $("#list-count").textContent = rows.length ? String(rows.length) : "";
+    document.querySelectorAll(".tabs button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.filter === S.filter)));
+    $("#sort").value = S.sort;
+
+    const list = $("#list");
+    if (!rows.length) {
+      const none = !S.cards.size;
+      list.replaceChildren(el("div", { class: "empty" },
+        el("h3", { text: none ? "No cards yet" : "Nothing here" }),
+        el("p", { text: none ? (S.mcp ? "Sync eBay to pull every card purchase and sale from your Gmail, with what you paid. Cards from shows or trades: tap Add card and snap a photo." : "Tap Add card and snap a photo. Claude reads the card and fills in the details.") : "No cards match this view." }),
+        none ? el("div", { class: "actions" },
+          S.mcp ? el("button", { class: "btn primary", type: "button", text: "Sync eBay", on: { click: () => syncEbay({ manual: true }) } }) : null,
+          el("button", { class: "btn", type: "button", text: "Add card", on: { click: () => openCard(null) } })) : null));
+      return;
+    }
+    list.replaceChildren(...rows.slice(0, 500).map(rowFor));
+  }
+
+  function rowFor(c) {
+    const thumb = el("div", { class: "thumb" });
+    if (c.photo) thumb.append(el("img", { src: "/_blob/" + c.photo, alt: "", loading: "lazy", on: { error: (e) => e.target.replaceWith(el("span", { class: "ph", text: c.grader || "Raw" })) } }));
+    else thumb.append(el("span", { class: "ph", text: c.grader || "Raw" }));
+    const chips = el("div", { class: "chips" }, gradeChip(c),
+      c.rc ? el("span", { class: "chip", text: "RC" }) : null,
+      c.auto ? el("span", { class: "chip", text: "AUTO" }) : null,
+      c.serial ? el("span", { class: "chip", text: c.serial }) : null,
+      c.vault ? el("span", { class: "chip", text: "VAULT" }) : null,
+      c.psa && c.psa.pop ? el("span", { class: "chip", text: "POP " + c.psa.pop }) : null,
+      c.needs_review ? el("span", { class: "chip flag", text: "CHECK" }) : null);
+    let money;
+    if (c.status === "sold") {
+      const net = netOfFees(c.sold);
+      const d = net != null && c.cost_cents != null ? net - c.cost_cents : null;
+      money = el("div", { class: "money" },
+        el("span", { class: "v", text: c.sold && c.sold.gross_cents != null ? usd(c.sold.gross_cents) : "Sold" }),
+        el("span", { class: "c " + (d == null ? "" : d >= 0 ? "gain" : "loss"), text: d == null ? (c.sold && c.sold.at ? "Sold " + fmtDate(c.sold.at) : "No cost") : signed(d) + " net" }));
+    } else {
+      const d = c.value_cents != null && c.value_prev_cents ? c.value_cents - c.value_prev_cents : 0;
+      money = el("div", { class: "money" },
+        el("span", { class: "v", text: c.value_cents != null ? usd(c.value_cents) + (c.value_thin || c.value_stale ? "*" : "") : "Not priced", title: c.value_thin ? "Based on 1 or 2 sales" : c.value_stale ? "No sales in the last 6 months" : null }),
+        el("span", { class: "c " + (d > 0 ? "gain" : d < 0 ? "loss" : ""), text: d ? `${signed(d)} wk` : c.cost_cents != null ? "Paid " + usd(c.cost_cents) : "No cost" }));
+    }
+    return el("button", { class: "row", type: "button", on: { click: () => openCard(c) } }, thumb,
+      el("div", { class: "who" }, el("b", { text: name(c) }), el("span", { class: "sub", text: subline(c) }), chips), money);
+  }
+
+  // ---------------------------------------------------------------- db writes
+  const cardRef = (id) => S.db.collection("cards").doc(id);
+  async function patchCard(id, data) { await cardRef(id).update({ ...data, updated_at: nowIso() }); }
+  async function createCard(id, data) { await cardRef(id).set({ created_at: nowIso(), updated_at: nowIso(), ...data }); }
+
+  let metaChain = Promise.resolve();
+  function saveSync(mut) {
+    // One write at a time to meta/sync; each applies to the latest local copy.
+    metaChain = metaChain.then(async () => {
+      const next = { processed: [], skipped: [], dismissed: [], ...(S.sync || {}) };
+      mut(next);
+      next.processed = (next.processed || []).slice(-4000);
+      S.sync = next;
+      await S.db.doc("meta/sync").set(next);
+    }).catch((e) => console.error("meta/sync write failed", e));
+    return metaChain;
+  }
+
+  async function pickGuide(c, k) {
+    // Every key written, so nothing from an earlier match ("no match", old rivals) lingers.
+    const g = { source: "cardsight", id: String(k.id), name: k.name || null, set: k.set || null, number: k.number || null,
+      release: k.release || null, subset: k.subset || null, year: k.year || null, rivals: Array.isArray(k.rivals) ? k.rivals : null,
+      confidence: 1, picked: true, none: null, auto: null };
+    await guard(() => patchCard(c.id, { guide: g, guide_candidates: null, needs_review: false, review_reason: null }), "Saved. Its price lands with the next update.");
+  }
+  async function noGuide(c) {
+    await guard(() => patchCard(c.id, { guide: { none: true, auto: null, id: null, picked: null, rivals: null }, guide_candidates: null, needs_review: false, review_reason: null }), "Marked as having no sales data.");
+  }
+  async function pickParallel(c, opt) {
+    const base = /^base( card)?$/i.test(opt);
+    await guard(() => patchCard(c.id, { parallel: base ? null : opt, parallel_options: null, needs_review: false, review_reason: null }), "Saved. Its price lands with the next update.");
+  }
+  async function clearReview(c, extra) { await guard(() => patchCard(c.id, { needs_review: false, review_reason: null, ...(extra || {}) })); }
+  async function mergeSale(saleCard, owned) {
+    await guard(async () => {
+      await patchCard(owned.id, { status: "sold", sold: saleCard.sold });
+      await cardRef(saleCard.id).delete();
+    }, "Sale linked to " + name(owned) + ".");
+  }
+  async function unskip(sk, isCard) {
+    await guard(async () => {
+      if (isCard) await createCard(purchaseId(sk.order, sk.item_id), purchaseCard(sk, sk, {}));
+      await saveSync((m) => { m.skipped = (m.skipped || []).filter((x) => x.key !== sk.key); if (!isCard) m.dismissed = [...(m.dismissed || []), sk.key].slice(-2000); });
+    }, isCard ? "Added to your cards." : "Dismissed.");
+  }
+  async function guard(fn, ok) {
+    try { await fn(); if (ok) toast(ok); }
+    catch (e) {
+      console.error(e);
+      toast(e && e.code === "quota_exceeded" ? "The collection is full. Delete some sold cards and try again." : "That didn't save. Check your connection and try again.");
+    }
+  }
+
+  // ---------------------------------------------------------------- drawer
+  let editing = null; // card being edited, or null for a new card
+  let photoFront = null, photoBack = null, identifyCtl = null;
+  const F = (id) => $("#f-" + id);
+
+  function openCard(c) {
+    editing = c;
+    photoFront = photoBack = null;
+    $("#d-title").textContent = c ? "Edit card" : "Add card";
+    $("#d-delete").hidden = !c;
+    $("#d-delete").textContent = "Delete card";
+    $("#d-delete").dataset.armed = "";
+    const v = c || { status: "owned", source: "show", acquired_at: today() };
+    F("player").value = v.player || "";
+    F("year").value = v.year || "";
+    F("number").value = v.number || "";
+    F("set").value = v.set || "";
+    F("parallel").value = v.parallel || "";
+    F("serial").value = v.serial || "";
+    F("grader").value = v.grader || "";
+    F("grade").value = v.grade ?? "";
+    F("cert").value = v.cert || "";
+    F("rc").checked = !!v.rc;
+    F("auto").checked = !!v.auto;
+    F("cost").value = v.cost_cents != null ? (v.cost_cents / 100).toFixed(2) : "";
+    F("acquired").value = v.acquired_at || "";
+    F("source").value = v.source || "other";
+    F("status").value = v.status || "owned";
+    F("sold").value = v.sold && v.sold.gross_cents != null ? (v.sold.gross_cents / 100).toFixed(2) : "";
+    F("sold-at").value = (v.sold && v.sold.at) || "";
+    soldFields();
+    const th = $("#d-thumb");
+    th.replaceChildren(c && c.photo ? el("img", { src: "/_blob/" + c.photo, alt: "Card photo" }) : el("span", { class: "ph", text: "No photo" }));
+    $("#back-label").hidden = true;
+    $("#id-line").textContent = S.sample ? "Snap the front. Claude reads the card and fills in the details." : "Add a photo for your records.";
+    guidePanel(c);
+    $("#scrim").hidden = false; $("#drawer").hidden = false;
+    setTimeout(() => (c ? $("#d-save") : $("label[for=f-photo]")).focus(), 30);
+  }
+  function closeDrawer() {
+    if (identifyCtl) identifyCtl.abort();
+    $("#scrim").hidden = true; $("#drawer").hidden = true; editing = null;
+  }
+  function soldFields() { const s = F("status").value === "sold"; $("#sold-a").hidden = !s; $("#sold-b").hidden = !s; }
+
+  function guidePanel(c) {
+    const g = $("#d-guide");
+    if (!c) { g.hidden = true; return; }
+    const kids = [el("div", { class: "section-title", text: "Sales data" })];
+    const gd = c.guide || {};
+    if (gd.id) kids.push(el("div", {}, "Matched to ", el("b", { text: (gd.name || "card " + gd.id) + (gd.number ? " #" + gd.number : "") }), gd.set ? " in " + gd.set : "", " on CardSight"));
+    else if (gd.none) kids.push(el("div", { text: "No sales data match for this card." }));
+    else kids.push(el("div", { text: "Not matched yet. The weekly update looks it up." }));
+    if (c.value_cents != null) kids.push(el("div", {}, el("b", { text: usd(c.value_cents) }), ` · ${c.value_basis || ""}` + (c.value_thin ? " · few sales, treat as rough" : "") + (c.value_stale ? ` · no sales since, checked ${fmtDate(c.value_checked_at)}` : ` · as of ${fmtDate(c.value_at)}`)));
+    else if (c.value_basis) kids.push(el("div", { text: c.value_basis }));
+    if (c.value_cents == null && c.status === "owned" && !c.number) kids.push(el("div", { text: "Add the card number (and year) so its sales can be found by listing title." }));
+    if (Array.isArray(c.value_sales) && c.value_sales.length) {
+      const label = (x) => `${usd(Math.round(x.price * 100))} on ${fmtDate(x.date)}`;
+      kids.push(el("div", {}, "Sales used: ", c.value_sales.map((x, i) => [i ? " · " : "", x.url ? el("a", { href: x.url, target: "_blank", rel: "noopener", text: label(x) }) : label(x)])));
+    }
+    if (c.psa && c.psa.verified_at) kids.push(el("div", { text: `PSA verified: ${c.psa.label || ""}${c.psa.pop ? ` · pop ${c.psa.pop}` : ""}${c.psa.pop_higher != null ? ` · ${c.psa.pop_higher} higher` : ""}` }));
+    if ((c.grader || "").toUpperCase() === "PSA" && c.cert) {
+      const off = ((S.job || {}).missing_tokens || []).includes("psa_not_approved");
+      kids.push(el("div", {}, c.psa && c.psa.verified_at ? "" : off ? "Automatic PSA checks need PSA to approve API access on your account. " : "",
+        el("a", { href: "https://www.psacard.com/cert/" + encodeURIComponent(c.cert), target: "_blank", rel: "noopener", text: `Cert ${c.cert} on PSA` })));
+    }
+    if (c.ebay && c.ebay.order) kids.push(el("div", { text: `eBay order ${c.ebay.order}${c.ebay.seller ? " from " + c.ebay.seller : ""}` }));
+    if (c.title && c.player) kids.push(el("div", { text: "Listing title: " + c.title }));
+    if (Array.isArray(c.history) && c.history.length > 1) kids.push(sparkline(c.history));
+    if (gd.id || gd.none) kids.push(el("div", {}, el("button", { class: "btn small", type: "button", text: "Look it up again", on: { click: async () => { await guard(() => patchCard(c.id, { guide: null, guide_query: null }), "It gets matched on the next update."); closeDrawer(); } } })));
+    g.replaceChildren(...kids); g.hidden = false;
+  }
+  function sparkline(hist) {
+    const ns = "http://www.w3.org/2000/svg", W = 440, H = 60, pad = 6;
+    const vals = hist.map((h) => h[1]); let lo = Math.min(...vals), hi = Math.max(...vals); if (hi === lo) { hi += 1; lo -= 1; }
+    const x = (i) => pad + (i / (hist.length - 1)) * (W - 2 * pad), y = (v) => pad + (1 - (v - lo) / (hi - lo)) * (H - 2 * pad);
+    const svg = document.createElementNS(ns, "svg"); svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.setAttribute("class", "hist");
+    svg.setAttribute("role", "img"); svg.setAttribute("aria-label", `Value from ${usd(vals[0])} to ${usd(vals[vals.length - 1])}`);
+    const p = document.createElementNS(ns, "path"); p.setAttribute("d", hist.map((h, i) => (i ? "L" : "M") + x(i).toFixed(1) + " " + y(h[1]).toFixed(1)).join(" "));
+    p.setAttribute("fill", "none"); p.setAttribute("stroke", "var(--navy)"); p.setAttribute("stroke-width", "2"); svg.append(p);
+    const dot = document.createElementNS(ns, "circle"); dot.setAttribute("cx", x(hist.length - 1)); dot.setAttribute("cy", y(vals[vals.length - 1])); dot.setAttribute("r", "3.5"); dot.setAttribute("fill", "var(--navy)"); svg.append(dot);
+    return svg;
+  }
+
+  function readForm() {
+    const num = (s) => { const v = parseFloat(String(s).replace(/[^0-9.]/g, "")); return isNaN(v) ? null : v; };
+    const txt = (id) => F(id).value.trim() || null;
+    const status = F("status").value;
+    const out = {
+      player: txt("player"), year: txt("year"), number: txt("number") && txt("number").replace(/^#/, ""), set: txt("set"),
+      parallel: txt("parallel"), serial: txt("serial"), grader: F("grader").value || null,
+      grade: F("grader").value ? num(F("grade").value) : null, cert: txt("cert") && txt("cert").replace(/\D/g, ""),
+      rc: F("rc").checked, auto: F("auto").checked, cost_cents: toCents(F("cost").value),
+      acquired_at: F("acquired").value || null, source: F("source").value, status,
+    };
+    if (status === "sold") {
+      const prev = (editing && editing.sold) || {};
+      out.sold = { ...prev, gross_cents: toCents(F("sold").value), at: F("sold-at").value || prev.at || today() };
+    }
+    return out;
+  }
+
+  async function saveCard() {
+    if (!S.db) return toast("Open this page in Claude to save cards.");
+    const f = readForm();
+    if (!f.player && !f.set && !(editing && editing.title)) return toast("Add at least the player or the set.");
+    const btn = $("#d-save"); btn.disabled = true;
+    try {
+      let photo = editing ? editing.photo || null : null;
+      if (photoFront && S.assets) {
+        try { photo = (await S.assets.upload(photoFront)).id; }
+        catch (e) { console.error(e); toast("Photo didn't upload. The card saves without it."); }
+      }
+      if (editing) {
+        const patch = { ...f, photo };
+        // Changing what the card is sends it back through sales data matching.
+        if (["player", "year", "set", "number"].some((k) => (editing[k] || null) !== (f[k] || null))) { patch.guide = null; patch.guide_query = null; }
+        if ((editing.parallel || null) !== (f.parallel || null)) patch.parallel_options = null;
+        if ((editing.cert || null) !== (f.cert || null)) patch.psa = null;
+        await patchCard(editing.id, patch);
+        toast("Saved.");
+      } else {
+        await createCard(newId("m"), { ...f, photo, title: [f.year, f.set, f.player, f.parallel, f.number && "#" + f.number].filter(Boolean).join(" "), needs_review: false });
+        toast("Added. Its price lands with the next update.");
+      }
+      closeDrawer();
+    } catch (e) {
+      console.error(e);
+      toast("That didn't save. Check your connection and try again.");
+    } finally { btn.disabled = false; }
+  }
+
+  async function deleteCard() {
+    const b = $("#d-delete");
+    if (!b.dataset.armed) { b.dataset.armed = "1"; b.textContent = "Tap again to delete"; setTimeout(() => { b.dataset.armed = ""; b.textContent = "Delete card"; }, 4000); return; }
+    const c = editing;
+    await guard(async () => {
+      // Remember what was deleted so a later re-read of eBay email can't add it back.
+      const keys = tombstones(c);
+      if (keys.length) await saveSync((m) => { m.dismissed = [...new Set([...(m.dismissed || []), ...keys])].slice(-2000); });
+      await cardRef(c.id).delete();
+      if (c.photo && S.assets) await S.assets.delete(c.photo).catch(() => {});
+      closeDrawer();
+    }, "Deleted.");
+  }
+
+  async function downscale(file, max = 1600) {
+    try {
+      const bmp = await createImageBitmap(file);
+      const k = Math.min(1, max / Math.max(bmp.width, bmp.height));
+      const cv = document.createElement("canvas"); cv.width = Math.round(bmp.width * k); cv.height = Math.round(bmp.height * k);
+      cv.getContext("2d").drawImage(bmp, 0, 0, cv.width, cv.height);
+      return await new Promise((res) => cv.toBlob((b) => res(b || file), "image/jpeg", 0.86));
+    } catch (e) { return file; }
+  }
+
+  async function onPhoto(file, back) {
+    if (!file) return;
+    const blob = await downscale(file);
+    if (back) photoBack = blob; else {
+      photoFront = blob;
+      $("#d-thumb").replaceChildren(el("img", { src: URL.createObjectURL(blob), alt: "Card photo" }));
+      $("#back-label").hidden = !S.sample;
+    }
+    if (S.sample) identify();
+  }
+
+  async function identify() {
+    const line = $("#id-line");
+    let caps = null;
+    try { caps = await S.sample.limits(); } catch (e) {}
+    if (!caps || !caps.images) { line.textContent = "Photo saved. Fill in the details below."; return; }
+    if (identifyCtl) identifyCtl.abort();
+    identifyCtl = new AbortController();
+    line.textContent = "Reading the card…";
+    const imgs = [photoFront, photoBack].filter(Boolean).slice(0, caps.images.maxCount || 2);
+    const prompt = `You are identifying one sports trading card from photos. Photo 1 is the front${imgs.length > 1 ? "; photo 2 is the back" : ""}.
+If the card is in a grading slab, read the slab label exactly: grading company, numeric grade, certification number.
+Reply with only one JSON object with these keys:
+{"player": string|null, "year": string|null (like "2020" or "2001-02"), "set": string|null (maker and set, like "Panini Donruss Optic"), "number": string|null (card number, no #), "parallel": string|null (like "Purple Shock" or "Gold Refractor"; null for a base card), "serial": string|null (like "/60" or "12/60"), "grader": "PSA"|"BGS"|"SGC"|"CGC"|null, "grade": number|null, "cert": string|null (digits only), "rc": boolean, "auto": boolean, "confidence": number from 0 to 1, "notes": string|null}
+Use null for anything you cannot read clearly. Never guess a cert number or serial.`;
+    try {
+      const r = await S.sample.json(prompt, { images: imgs, signal: identifyCtl.signal });
+      if (!r || typeof r !== "object") throw { code: "invalid_json" };
+      const setIf = (id, v) => { if (v != null && v !== "" && !F(id).value) F(id).value = v; };
+      // Keep the name only: "Cracked Ice (appears to be ...)" would stop sales from being found.
+      const bare = (v) => v && String(v).replace(/\([^)]*\)?|\[[^\]]*\]?/g, " ").replace(/\s+/g, " ").trim();
+      setIf("player", r.player); setIf("year", r.year); setIf("set", bare(r.set)); setIf("number", r.number && String(r.number).replace(/^#/, ""));
+      setIf("parallel", bare(r.parallel)); setIf("serial", r.serial); setIf("cert", r.cert && String(r.cert).replace(/\D/g, ""));
+      if (r.grader && !F("grader").value && ["PSA", "BGS", "SGC", "CGC"].includes(String(r.grader).toUpperCase())) F("grader").value = String(r.grader).toUpperCase();
+      if (r.grade != null && !F("grade").value) F("grade").value = r.grade;
+      if (r.rc) F("rc").checked = true;
+      if (r.auto) F("auto").checked = true;
+      const conf = typeof r.confidence === "number" ? r.confidence : null;
+      line.textContent = conf != null && conf < 0.6 ? "Best guess filled in. Check the fields before saving." : "Filled in from the photo. Check and save.";
+    } catch (e) {
+      if (e && e.code === "cancelled") return;
+      const msg = {
+        not_granted: "Claude isn't allowed on this page, so fill in the details by hand.",
+        rate_limited: "Claude is busy right now. Fill in by hand or try the photo again in a minute.",
+        image_rejected: "That photo couldn't be read. Try a JPEG or PNG.",
+        refused: "Claude couldn't read this photo. Fill in the details by hand.",
+        invalid_json: "Couldn't read the card clearly. Try a sharper photo or fill in by hand.",
+      }[e && e.code] || "Couldn't read the card. Fill in the details by hand.";
+      line.textContent = msg;
+    } finally { identifyCtl = null; }
+  }
+
+  // ---------------------------------------------------------------- eBay sync
+  // Bump when the email reader changes in a way that should re-read history;
+  // the next sync re-reads every eBay email and repairs records in place.
+  // 4: history is searched in date windows (one search stopped at 50 emails).
+  const PARSER_VERSION = 4;
+  const READER_MIN = 3; // oldest ebay-parse.js that may run a re-read
+  const findSaleRecord = (ev, cards) => {
+    for (const c of cards) {
+      const s = c.sold;
+      if (s && (s.msg_id === ev.id || (ev.order && s.order === ev.order) || (ev.item_id && s.item_id === ev.item_id))) return c;
+    }
+    return null;
+  };
+  const purchaseId = (order, item) => safeId(`eb-${order || "x"}-${item || "x"}`);
+  const saleId = (ev) => safeId(`es-${ev.order || ev.item_id || ev.id}`);
+  // Keys that stop sync from recreating a deleted card: its purchase and its sale.
+  function tombstones(c) {
+    const keys = [];
+    if (c.ebay && (c.ebay.order || c.ebay.item_id)) keys.push(purchaseId(c.ebay.order, c.ebay.item_id));
+    if (c.id && (c.id.startsWith("eb-") || c.id.startsWith("es-"))) keys.push(c.id);
+    if (c.sold && c.sold.msg_id) keys.push("sale:" + c.sold.msg_id, saleId({ order: c.sold.order, item_id: c.sold.item_id, id: c.sold.msg_id }));
+    return [...new Set(keys)];
+  }
+  const saleDismissed = (ev, dismissed) => dismissed.has("sale:" + ev.id) || dismissed.has(saleId(ev));
+  function purchaseCard(it, ev, extra) {
+    const t = P.parseTitle(it.title);
+    const e = extra || {};
+    return {
+      title: it.title, player: e.player || null, year: e.year || t.year, set: e.set || null, number: e.number || t.number,
+      parallel: e.parallel || null, serial: e.serial || t.serial, grader: e.grader || t.grader, grade: e.grade ?? t.grade,
+      cert: null, rc: e.rc ?? t.rc, auto: e.auto ?? t.auto, sport: e.sport || null,
+      status: "owned", source: "ebay", acquired_at: ev.date || today(), cost_cents: it.cost_cents ?? null,
+      ebay: { order: it.order || ev.order || null, item_id: it.item_id || null, msg_id: ev.id || ev.msg_id || null, seller: ev.seller || null, price_cents: it.price_cents ?? null },
+      vault: !!ev.vault, photo: null,
+      needs_review: !!(t.lot || e.lot), review_reason: t.lot || e.lot ? "Lot of several cards. Edit it into one card, or keep it as one line." : null,
+    };
+  }
+
+  async function gmail(tool, input) {
+    try {
+      const r = await S.mcp.callTool("Gmail", tool, input);
+      let p = r.payload;
+      if (typeof p === "string") { try { p = JSON.parse(p); } catch (e) {} }
+      return p || {};
+    } catch (e) {
+      if (e && e.retryable) { await new Promise((r) => setTimeout(r, (e.retryAfterMs || 1500) + Math.random() * 500)); const r = await S.mcp.callTool("Gmail", tool, input); return typeof r.payload === "string" ? JSON.parse(r.payload) : r.payload || {}; }
+      throw e;
+    }
+  }
+
+  // Gmail returns at most 50 threads per search and may not offer a next page,
+  // so history is read in date windows, and a window that fills up is split.
+  const EBAY_QUERY = `from:ebay.com (subject:confirmed OR subject:"made the sale" OR subject:"refund issued")`;
+  const gmailDay = (t) => { const d = new Date(t); return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`; };
+  async function searchWindows(start, end) {
+    const out = [];
+    const windows = [];
+    for (let t = start; t < end; t += 90 * DAY) windows.push([t, Math.min(end, t + 90 * DAY)]);
+    while (windows.length) {
+      const [a, b] = windows.shift();
+      const query = `${EBAY_QUERY} after:${gmailDay(a)} before:${gmailDay(b)}`;
+      const got = [];
+      let token = "";
+      for (let page = 0; page < 30; page++) {
+        const res = await gmail("search_threads", { query, pageSize: 50, ...(token ? { pageToken: token } : {}) });
+        got.push(...(res.threads || []));
+        token = res.nextPageToken;
+        if (!token) break;
+      }
+      const full = got.length >= 50 && got.length % 50 === 0;
+      if (full && b - a > 2 * DAY) { const mid = a + Math.floor((b - a) / 2 / DAY) * DAY; windows.unshift([a, mid], [mid, b]); continue; }
+      out.push(...got);
+    }
+    return out;
+  }
+
+  // Ask Claude once for structured fields across many listing titles.
+  async function enrichTitles(list) {
+    const out = new Map();
+    if (!S.sample || !list.length) return out;
+    for (let i = 0; i < list.length; i += 60) {
+      const chunk = list.slice(i, i + 60);
+      const prompt = `Each line below is "id<TAB>eBay listing title" for a sports card bought or sold on eBay.
+Return only a JSON array, one object per line, with keys:
+{"id": string, "is_card": boolean (false for supplies, memorabilia that is not a card, or non-sports items), "player": string|null, "year": string|null, "set": string|null (maker and set, like "Topps Chrome"), "number": string|null (no #), "parallel": string|null (null for base), "serial": string|null (like "/60"), "grader": "PSA"|"BGS"|"SGC"|"CGC"|null, "grade": number|null, "sport": "baseball"|"basketball"|"football"|"hockey"|"soccer"|"racing"|"other"|null, "rc": boolean, "auto": boolean, "lot": boolean (more than one card)}
+Use null when the title does not say. Do not invent players or sets.
+
+${chunk.map((x) => x.id + "\t" + x.title.replace(/\s+/g, " ")).join("\n")}`;
+      try {
+        const arr = await S.sample.json(prompt, { modelTier: "default" });
+        if (Array.isArray(arr)) for (const r of arr) if (r && r.id) out.set(String(r.id), r);
+      } catch (e) {
+        if (e && (e.code === "not_granted" || e.code === "sampling_disabled")) break;
+        console.warn("title enrichment failed", e);
+      }
+    }
+    return out;
+  }
+
+  async function syncEbay({ manual, full } = {}) {
+    if (!S.mcp || !S.db || S.syncing) return;
+    S.syncing = true; $("#btn-sync").disabled = true;
+    const stats = { purchases: 0, sales: 0, refunds: 0, skipped: 0, repaired: 0, removed: 0 };
+    try {
+      const meta = S.sync || {};
+      // Re-read history only with a reader at least as new as this page expects
+      // (a cached old ebay-parse.js would repeat the old mistakes).
+      const rescan = full || ((meta.parser_version || 1) < PARSER_VERSION && (P.VERSION || 1) >= READER_MIN);
+      const processed = new Set(rescan ? [] : meta.processed || []);
+      const dismissed = new Set(meta.dismissed || []);
+      const end = Date.now() + DAY;
+      const start = rescan || !meta.gmail_last ? end - 3 * 366 * DAY : Date.parse(meta.gmail_last) - 3 * DAY;
+      progress("Checking Gmail for eBay orders…");
+      const heads = [];
+      const seen = new Set();
+      for (const th of await searchWindows(start, end)) for (const m of th.messages || []) {
+        if (m && m.id && !seen.has(m.id) && !processed.has(m.id) && P.classify(m.subject || "")) { seen.add(m.id); heads.push(m); }
+      }
+      if (!heads.length) {
+        await saveSync((m) => { m.gmail_last = nowIso(); if (rescan) m.parser_version = PARSER_VERSION; });
+        if (manual) toast("Up to date. No new eBay orders or sales.");
+        return;
+      }
+
+      // Fetch bodies two at a time. An email that fails is retried once, and if
+      // it still fails it stays unread so the next sync tries it again.
+      const msgs = [];
+      const failed = [];
+      let done = 0;
+      const queue = heads.slice();
+      const fatal = ["needs_reauth", "server_not_connected", "not_in_manifest", "approval_required", "blocked_by_policy"];
+      async function worker() {
+        while (queue.length) {
+          const h = queue.shift();
+          for (let attempt = 0; attempt < 2; attempt++) {
+            try {
+              const msg = await gmail("get_message", { messageId: h.id, messageFormat: "PLAIN_TEXT" });
+              if (!msg || !msg.plaintextBody) throw { code: "empty_body" };
+              msgs.push({ id: h.id, subject: msg.subject || h.subject, date: msg.date || h.date, plaintextBody: msg.plaintextBody });
+              break;
+            } catch (e) {
+              if (e && fatal.includes(e.code)) throw e;
+              if (attempt === 1) { failed.push(h.id); console.warn("could not read", h.id, e); }
+              else await new Promise((r) => setTimeout(r, 1500 + Math.random() * 1000));
+            }
+          }
+          progress(`Reading eBay emails ${++done} of ${heads.length}…`);
+        }
+      }
+      await Promise.all([worker(), worker()]);
+
+      const events = msgs.map(P.parseMessage).filter((e) => e.kind).sort((a, b) => String(a.date).localeCompare(String(b.date)));
+
+      // Titles worth structuring: card-looking purchases and sales not recorded yet.
+      const toEnrich = [];
+      const known = [...S.cards.values()];
+      for (const ev of events) {
+        if (ev.kind === "purchase") ev.items.forEach((it, i) => { const id = purchaseId(it.order || ev.order, it.item_id); if (P.looksLikeCard(it.title) && !S.cards.has(id) && !dismissed.has(id)) toEnrich.push({ id: `${ev.id}:${i}`, title: it.title }); });
+        if (ev.kind === "sale" && !saleDismissed(ev, dismissed) && !findSaleRecord(ev, known)) toEnrich.push({ id: `${ev.id}:s`, title: ev.title });
+      }
+      let extra = new Map();
+      const sampleState = S.perms ? await S.perms.state("sample").catch(() => "unavailable") : "unavailable";
+      if (toEnrich.length && (manual || sampleState === "granted")) { progress(`Reading ${toEnrich.length} listing titles…`); extra = await enrichTitles(toEnrich); }
+
+      const working = new Map(S.cards);
+      const newSkipped = [];
+      for (const ev of events) {
+        if (ev.kind === "purchase") {
+          for (let i = 0; i < ev.items.length; i++) {
+            const it = ev.items[i];
+            const id = purchaseId(it.order || ev.order, it.item_id);
+            const key = id;
+            const x = extra.get(`${ev.id}:${i}`);
+            if (working.has(id) || dismissed.has(key)) continue;
+            if (!P.looksLikeCard(it.title) || (x && x.is_card === false)) {
+              if (!(S.sync && (S.sync.skipped || []).some((s) => s.key === key)) && !newSkipped.some((s) => s.key === key)) {
+                newSkipped.push({ key, title: it.title, order: it.order || ev.order, item_id: it.item_id, cost_cents: it.cost_cents, price_cents: it.price_cents, date: ev.date, msg_id: ev.id, seller: ev.seller, vault: ev.vault });
+                stats.skipped++;
+              }
+              continue;
+            }
+            const doc = purchaseCard(it, ev, x);
+            await createCard(id, doc);
+            working.set(id, { id, ...doc });
+            stats.purchases++;
+          }
+        } else if (ev.kind === "sale") {
+          if (saleDismissed(ev, dismissed)) continue;
+          const x = extra.get(`${ev.id}:s`) || {};
+          const sold = { at: ev.date, gross_cents: ev.gross_cents, ship_cents: ev.ship_cents ?? null, order: ev.order, item_id: ev.item_id, msg_id: ev.id, paid: ev.paid };
+          const existing = findSaleRecord(ev, working.values());
+          if (existing) {
+            // Already recorded. Fill what an older reader missed, drop non-card
+            // items it let through, and refresh "which card did you sell?" choices.
+            if (existing.id.startsWith("es-") && existing.cost_cents == null && !existing.player && !P.looksLikeCard(existing.title || ev.title)) {
+              await cardRef(existing.id).delete();
+              working.delete(existing.id);
+              stats.removed++;
+              continue;
+            }
+            const s = { ...(existing.sold || {}) };
+            const patch = {};
+            if (["gross_cents", "ship_cents", "order", "item_id"].some((k) => s[k] == null && sold[k] != null)) {
+              for (const k of ["gross_cents", "ship_cents", "order", "item_id"]) if (s[k] == null && sold[k] != null) s[k] = sold[k];
+              patch.sold = s;
+            }
+            if (existing.review_reason === "Which card did you sell?") {
+              const cands = P.rankForSale({ ...ev, title: existing.title || ev.title }, [...working.values()]);
+              Object.assign(patch, { sale_candidates: cands.length ? cands : null, needs_review: cands.length > 0, review_reason: cands.length ? existing.review_reason : null });
+            }
+            if (Object.keys(patch).length) {
+              await patchCard(existing.id, patch);
+              working.set(existing.id, { ...existing, ...patch });
+              stats.repaired++;
+            }
+            continue;
+          }
+          const cards = [...working.values()];
+          const m = P.matchSale(ev, cards);
+          if (m && m.already) {
+            const s = { ...(m.card.sold || {}) };
+            for (const k of ["order", "item_id", "ship_cents"]) if (s[k] == null && sold[k] != null) s[k] = sold[k];
+            s.paid = s.paid || sold.paid;
+            await patchCard(m.card.id, { sold: s });
+            working.set(m.card.id, { ...m.card, sold: s });
+          } else if (m) {
+            await patchCard(m.card.id, { status: "sold", sold });
+            working.set(m.card.id, { ...m.card, status: "sold", sold });
+            stats.sales++;
+          } else {
+            const id = saleId(ev);
+            if (working.has(id)) continue;
+            // A sale of something that isn't a card (toys, supplies) isn't tracked.
+            if (x.is_card === false || (!x.player && !P.looksLikeCard(ev.title))) continue;
+            const t = P.parseTitle(ev.title);
+            const cands = P.rankForSale(ev, cards);
+            const doc = {
+              title: ev.title, player: x.player || null, year: x.year || t.year, set: x.set || null, number: x.number || t.number,
+              parallel: x.parallel || null, serial: x.serial || t.serial, grader: x.grader || t.grader, grade: x.grade ?? t.grade,
+              rc: x.rc ?? t.rc, auto: x.auto ?? t.auto, status: "sold", source: "other", cost_cents: null, acquired_at: null, sold, photo: null,
+              needs_review: cands.length > 0, review_reason: cands.length ? "Which card did you sell?" : null, sale_candidates: cands.length ? cands : null,
+            };
+            await createCard(id, doc);
+            working.set(id, { id, ...doc });
+            stats.sales++;
+          }
+        } else if (ev.kind === "refund" && ev.order) {
+          for (const c of [...working.values()]) {
+            if (c.ebay && c.ebay.order === ev.order && c.status === "owned") {
+              await patchCard(c.id, { status: "refunded", refunded_at: ev.date });
+              working.set(c.id, { ...c, status: "refunded" });
+              stats.refunds++;
+            }
+          }
+        }
+      }
+      await saveSync((m) => {
+        m.processed = [...new Set([...(m.processed || []), ...msgs.map((x) => x.id)])];
+        const seen = new Set();
+        m.skipped = [...(m.skipped || []), ...newSkipped].filter((x) => !seen.has(x.key) && seen.add(x.key));
+        if (!failed.length || !rescan) m.parser_version = Math.max(m.parser_version || 1, rescan ? PARSER_VERSION : (m.parser_version || 1));
+        m.gmail_last = nowIso();
+        m.last_stats = { at: nowIso(), ...stats };
+      });
+      const parts = [];
+      if (stats.purchases) parts.push(`${stats.purchases} new card${stats.purchases === 1 ? "" : "s"}`);
+      if (stats.sales) parts.push(`${stats.sales} sale${stats.sales === 1 ? "" : "s"}`);
+      if (stats.refunds) parts.push(`${stats.refunds} refund${stats.refunds === 1 ? "" : "s"}`);
+      if (stats.skipped) parts.push(`${stats.skipped} non card item${stats.skipped === 1 ? "" : "s"} to confirm`);
+      if (stats.repaired) parts.push(`${stats.repaired} earlier sale${stats.repaired === 1 ? "" : "s"} fixed`);
+      if (stats.removed) parts.push(`${stats.removed} non card sale${stats.removed === 1 ? "" : "s"} removed`);
+      if (failed.length) parts.push(`${failed.length} email${failed.length === 1 ? "" : "s"} couldn't be read and will be retried next sync`);
+      toast(parts.length ? "From eBay: " + parts.join(", ") + "." : "Up to date. No new eBay orders or sales.");
+    } catch (e) {
+      console.error(e);
+      const msg = {
+        needs_reauth: "Gmail needs reconnecting. Go to claude.ai Settings, Connectors, and reconnect Gmail.",
+        server_not_connected: "Add the Gmail connector in claude.ai Settings, Connectors, then sync again.",
+        not_in_manifest: "Gmail isn't allowed for Card Vault yet. Allow it when asked, or turn it on in this page's Permissions menu.",
+        approval_required: "Syncing needs your OK to read Gmail. Tap Sync eBay and allow it.",
+        blocked_by_policy: "Your organization blocks Gmail here, so eBay sync is off.",
+        selection_required: "You have more than one Gmail connected. Pick one when Claude asks, then sync again.",
+        server_unavailable: "Gmail didn't answer. Try again in a minute.",
+      }[e && e.code];
+      if (manual || msg) toast(msg || "eBay sync stopped partway. Run it again to pick up the rest.", 6500);
+    } finally {
+      S.syncing = false; $("#btn-sync").disabled = false; progress("");
+    }
+  }
+
+  // ---------------------------------------------------------------- other actions
+  async function refreshPrices() {
+    const b = $("#btn-refresh"); b.disabled = true;
+    try {
+      await S.mcp.callTool("Claude Code Remote", "fire_trigger", { trigger_id: S.config.trigger_id, text: "Started from the Update prices button in Card Vault." });
+      toast("Price update started. New values land in a few minutes.");
+    } catch (e) {
+      console.error(e);
+      toast(e && e.code === "not_in_manifest" ? "Allow Claude Code Remote for this page to start updates from here." : "Couldn't start the update. The weekly run still happens on Sunday.", 6000);
+    } finally { setTimeout(() => (b.disabled = false), 8000); }
+  }
+
+  async function exportCsv() {
+    const cols = ["status", "player", "year", "set", "number", "parallel", "serial", "grader", "grade", "cert", "rc", "auto", "source", "acquired_at", "cost", "value", "value_basis", "value_at", "value_sales", "sold_at", "sold_gross", "sold_net_est", "title", "ebay_order"];
+    const q = (v) => { const s = v == null ? "" : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+    const d = (c) => (c == null ? "" : (c / 100).toFixed(2));
+    const lines = [cols.join(",")];
+    for (const c of S.cards.values()) {
+      lines.push([c.status, c.player, c.year, c.set, c.number, c.parallel, c.serial, c.grader, c.grade, c.cert, c.rc ? "Y" : "", c.auto ? "Y" : "", c.source, c.acquired_at,
+        d(c.cost_cents), d(c.value_cents), c.value_basis, c.value_at, c.value_n, c.sold && c.sold.at, d(c.sold && c.sold.gross_cents), d(netOfFees(c.sold)), c.title, c.ebay && c.ebay.order].map(q).join(","));
+    }
+    try { await S.downloads.save({ filename: `card-vault-${today()}.csv`, data: lines.join("\n") }); }
+    catch (e) { if (e && e.code !== "declined") toast("Couldn't export here."); }
+  }
+
+  // ---------------------------------------------------------------- wiring
+  $("#btn-add").addEventListener("click", () => openCard(null));
+  $("#btn-sync").addEventListener("click", () => syncEbay({ manual: true }));
+  $("#btn-refresh").addEventListener("click", refreshPrices);
+  $("#btn-export").addEventListener("click", exportCsv);
+  $("#d-close").addEventListener("click", closeDrawer);
+  $("#scrim").addEventListener("click", closeDrawer);
+  $("#d-save").addEventListener("click", saveCard);
+  $("#d-delete").addEventListener("click", deleteCard);
+  F("status").addEventListener("change", soldFields);
+  F("photo").addEventListener("change", (e) => { onPhoto(e.target.files[0], false); e.target.value = ""; });
+  F("photo-back").addEventListener("change", (e) => { onPhoto(e.target.files[0], true); e.target.value = ""; });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("#drawer").hidden) closeDrawer(); });
+  document.querySelectorAll(".tabs button").forEach((b) => b.addEventListener("click", () => { S.filter = b.dataset.filter; try { localStorage.setItem("cv-filter", S.filter); } catch (e) {} schedule(); }));
+  $("#q").addEventListener("input", (e) => { S.q = e.target.value; schedule(); });
+  $("#sort").addEventListener("change", (e) => { S.sort = e.target.value; try { localStorage.setItem("cv-sort", S.sort); } catch (e2) {} schedule(); });
+  let rz; window.addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(renderChart, 150); });
+
+  render();
+
+  // ---------------------------------------------------------------- boot
+  async function boot() {
+    const use = (n) => (window.claude && window.claude.use ? window.claude.use(n).catch(() => null) : Promise.resolve(null));
+    const [db, mcp, sample, assets, downloads, perms] = await Promise.all([use("db"), use("mcp"), use("sample"), use("assets"), use("downloads"), use("permissions")]);
+    Object.assign(S, { db, mcp, sample, assets, downloads, perms, loaded: true });
+    if (!db) { schedule(); return; }
+    const onErr = (e) => { console.error("db", e); if (e && e.code !== "revoked") toast("Lost the live connection. Reload to reconnect."); };
+    let first = true;
+    db.collection("cards").onSnapshot((snap) => {
+      S.cards = new Map(snap.docs.map((d) => [d.id, { id: d.id, ...d.data() }]));
+      schedule();
+      if (first && !snap.metadata.fromCache) { first = false; maybeAutoSync(); }
+    }, onErr);
+    db.collection("snapshots").orderBy("date").limit(400).onSnapshot((snap) => { S.snaps = snap.docs.map((d) => d.data()); schedule(); }, onErr);
+    db.doc("meta/sync").onSnapshot((d) => { S.sync = d.exists ? d.data() : {}; schedule(); }, onErr);
+    db.doc("meta/config").onSnapshot((d) => { S.config = d.exists ? d.data() : {}; schedule(); }, onErr);
+    db.doc("meta/job").onSnapshot((d) => { S.job = d.exists ? d.data() : null; schedule(); }, onErr);
+    schedule();
+  }
+
+  // Sync quietly on open when Gmail is already allowed and it's been a while.
+  async function maybeAutoSync() {
+    if (!S.mcp || !S.perms) return;
+    const st = await S.perms.state("mcp:Gmail").catch(() => "unavailable");
+    const waitForMeta = () => new Promise((r) => { const t0 = Date.now(); (function poll() { if (S.sync || Date.now() - t0 > 4000) r(); else setTimeout(poll, 150); })(); });
+    await waitForMeta();
+    const last = S.sync && S.sync.gmail_last ? Date.parse(S.sync.gmail_last) : 0;
+    const outdated = ((S.sync && S.sync.parser_version) || 1) < PARSER_VERSION;
+    if (st === "granted" && last && (outdated || Date.now() - last > 6 * 3600e3)) syncEbay({ manual: false });
+  }
+
+  boot();
+})();
+</script>
