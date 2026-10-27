@@ -1,8 +1,10 @@
 """Run: python3 -I card-vault/tests/test_refresh.py  (no network; APIs are faked)"""
 
+import io
 import json
 import sys
 import tempfile
+import zipfile
 import unittest
 from pathlib import Path
 
@@ -54,8 +56,9 @@ BURROW_SALES = pricing(
 
 class FakeClients(R.Clients):
     def __init__(self, search=None, bulk=None, deep=None, certs=None, cs="k", psa="t", unauthorized=False, psa_refusal=None,
-                 titles=None):
+                 titles=None, readings=None, magic=None):
         super().__init__(cs, psa, get=None, pause=0)
+        self._readings, self._magic, self.magic_calls = readings or {}, magic or {}, []
         self._search, self._bulk, self._deep, self._certs, self._unauth = search, bulk or {}, deep or {}, certs or {}, unauthorized
         self._psa_refusal, self._titles = psa_refusal, titles
         self.title_queries = []
@@ -84,6 +87,15 @@ class FakeClients(R.Clients):
         self.deep_calls.append((card_id, grade_id, parallel_id, period))
         d = self._deep.get(card_id)
         return d.get(period, d) if isinstance(d, dict) and period in d else (d or pricing())
+
+    def cs_identify(self, file):
+        self.calls["cardsight"] += 1
+        return self._readings.get(Path(file).stem, {})
+
+    def cs_cardmagic(self, file, slab):
+        self.calls["cardsight"] += 1
+        self.magic_calls.append((Path(file).stem, slab))
+        return self._magic.get(Path(file).stem, (200, {"content-type": "image/jpeg", "x-cardmagic-subject": "slab" if slab else "card"}, b"JPEG"))
 
     def cs_title_search(self, q, period="1y"):
         self.calls["cardsight"] += 1
@@ -633,6 +645,131 @@ class Rivals(unittest.TestCase):
         patches, _, _ = R.run([c], FakeClients(), TODAY)
         self.assertTrue(patches["c1"]["needs_review"])
         self.assertIsNone(patches["c1"]["guide"])
+
+
+def reading(conf="High", **card):
+    base = {"id": "c-burrow-151", "name": "Joe Burrow", "number": "151", "year": "2020", "manufacturer": "Panini",
+            "releaseName": "Donruss Optic", "setName": "Base Set", "attributes": ["RC"],
+            "parallelSuggestions": [{"name": "Purple Shock", "confidence": "Medium"}]}
+    base.update(card)
+    return {"success": True, "detections": [{"confidence": conf, "card": base}]}
+
+
+SLAB_READING = {"success": True, "detections": [{"confidence": "High", "card": {}, "grading": {
+    "confidence": "High", "company": {"name": "PSA"}, "grade": {"value": "7", "condition": "NM"}, "certNumber": "69821330"}}]}
+
+
+class Photos(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+        (self.dir / "in").mkdir()
+        for pid in ("p1", "p2", "p3"):
+            (self.dir / "in" / f"{pid}.jpg").write_bytes(b"photo")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_photos(self, cards, cl, **kw):
+        return R.run(cards, cl, TODAY, photo_dir=self.dir / "in", out_dir=self.dir / "out", **kw)
+
+    def test_sure_reading_fills_blanks_matches_and_prices(self):
+        c = card(id="m1", photo="p1", number=None, year=None, set=None, parallel=None, grader=None, grade=None, title=None)
+        cl = FakeClients(readings={"p1": reading()}, bulk={"c-burrow-151": BURROW_SALES})
+        patches, summary, _ = self.run_photos([c], cl)
+        p = patches["m1"]
+        self.assertEqual((p["number"], p["year"], p["set"]), ("151", "2020", "Panini Donruss Optic"))
+        self.assertEqual(p["guide"]["id"], "c-burrow-151")
+        self.assertNotIn("parallel", p)  # only a Medium suggestion
+        self.assertTrue(p["photo_pending"])
+        self.assertEqual(p["value_cents"], 1500)  # raw base sales: 14, 16
+        self.assertTrue((self.dir / "out" / "photos" / "m1.jpg").is_file())
+        self.assertEqual(summary["photos"], {"cleaned": 1, "unreadable": 0})
+
+    def test_slab_label_fills_grade_and_cert_and_keeps_the_slab(self):
+        c = card(id="m2", photo="p2", grader=None, grade=None, guide={"id": "g", "subset": "Base Set", "rivals": []})
+        cl = FakeClients(readings={"p2": SLAB_READING}, bulk={"g": BURROW_SALES})
+        patches, _, _ = self.run_photos([c], cl)
+        p = patches["m2"]
+        self.assertEqual((p["grader"], p["grade"], p["cert"]), ("PSA", 7.0, "69821330"))
+        self.assertEqual(cl.magic_calls, [("p2", True)])
+        self.assertEqual(p["photo_kind"], "slab")
+
+    def test_disagreeing_reading_asks_and_changes_nothing(self):
+        c = card(id="m3", photo="p3", guide={"id": "g", "subset": "Base Set", "rivals": []})
+        cl = FakeClients(readings={"p3": reading(number="152", id="other")}, bulk={"g": BURROW_SALES})
+        patches, _, _ = self.run_photos([c], cl)
+        p = patches["m3"]
+        self.assertEqual(p["review_reason"], R.PHOTO_REASON)
+        self.assertEqual(p["photo_reading"]["number"], "152")
+        self.assertNotIn("number", p)
+        self.assertNotIn("guide", p)
+
+    def test_unsure_reading_of_a_card_without_a_number_asks(self):
+        c = card(id="m1", photo="p1", number=None)
+        p = R.identify_patch(c, reading(conf="Low"))
+        self.assertEqual(p["review_reason"], R.PHOTO_REASON)
+        self.assertNotIn("number", p)
+        self.assertEqual(R.photo_fields(c, p["photo_reading"])["number"], "151")  # what a yes would apply
+
+    def test_photo_with_no_card_is_marked_not_retried(self):
+        c = card(id="m1", photo="p1")
+        cl = FakeClients(magic={"p1": (422, {}, b"")})
+        patches, summary, _ = self.run_photos([c], cl)
+        self.assertEqual(patches["m1"]["photo_error"], "No card found in the photo")
+        self.assertEqual(patches["m1"]["photo_checked_at"], TODAY)
+        self.assertEqual(summary["photos"]["unreadable"], 1)
+
+    def test_booklet_read_as_two_cards_keeps_the_original(self):
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as z:
+            z.writestr("card_1.jpg", b"second")
+            z.writestr("card_0.jpg", b"first")
+        cl = FakeClients(magic={"p1": (200, {"content-type": "application/zip"}, buf.getvalue())})
+        patches, _, _ = self.run_photos([card(id="m1", photo="p1")], cl)
+        self.assertFalse((self.dir / "out" / "photos" / "m1.jpg").exists())
+        self.assertIn("More than one card", patches["m1"]["photo_error"])
+
+    def test_one_card_zip_with_corner_closeups_uses_the_card(self):
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as z:
+            z.writestr("card_0.jpg", b"first")
+            z.writestr("card_0_top-left.jpg", b"corner")
+        cl = FakeClients(magic={"p1": (200, {"content-type": "application/zip"}, buf.getvalue())})
+        self.run_photos([card(id="m1", photo="p1")], cl)
+        self.assertEqual((self.dir / "out" / "photos" / "m1.jpg").read_bytes(), b"first")
+
+    def test_only_waiting_photos_with_a_file_are_read_owned_first(self):
+        cards = [card(id="a", photo="p1", status="sold", created_at="2026-10-27"), card(id="b", photo="p2", created_at="2026-10-01"),
+                 card(id="c", photo="p3", photo_checked_at="2026-10-20"), card(id="d", photo="zz")]
+        self.assertEqual([c["id"] for c in R.photos_needed(cards)], ["b", "d", "a"])
+        cl = FakeClients()
+        self.run_photos(cards, cl)
+        self.assertEqual([m[0] for m in cl.magic_calls], ["p2", "p1"])  # no file for zz
+
+    def test_attach_uploads_and_retry_the_rest(self):
+        out = self.dir / "out"
+        (out / "cards").mkdir(parents=True)
+        (out / "cards" / "m1.json").write_text(json.dumps({"photo_pending": True, "photo_checked_at": TODAY, "photo_kind": "card"}))
+        (out / "cards" / "m2.json").write_text(json.dumps({"photo_pending": True, "photo_checked_at": TODAY, "photo_kind": "slab"}))
+        (out / "cards" / "m3.json").write_text(json.dumps({"value_cents": 5}))
+        R.attach_photos(out, {"m1": "/_blob/abc123"})
+        self.assertEqual(json.loads((out / "cards" / "m1.json").read_text()), {"photo_checked_at": TODAY, "photo_kind": "card", "photo_clean": "abc123"})
+        self.assertEqual(json.loads((out / "cards" / "m2.json").read_text()), {})
+        self.assertEqual(json.loads((out / "cards" / "m3.json").read_text()), {"value_cents": 5})
+
+
+class GradeValues(unittest.TestCase):
+    def test_raw_card_gets_psa_10_and_9_from_the_same_sales(self):
+        raw = card(parallel="Purple Shock", grader=None, grade=None, guide={"id": "g", "subset": "Base Set", "rivals": []})
+        patches, _, _ = R.run([raw], FakeClients(bulk={"g": BURROW_SALES}), TODAY)
+        gv = patches["c1"]["grade_values"]
+        self.assertEqual(gv["PSA 10"], {"cents": 24000, "n": 5, "last": "2026-10-28"})
+        self.assertEqual(gv["PSA 9"]["cents"], 11000)
+
+    def test_slab_gets_none(self):
+        patches, _, _ = R.run([card(guide={"id": "g", "subset": "Base Set", "rivals": []})], FakeClients(bulk={"g": BURROW_SALES}), TODAY)
+        self.assertNotIn("grade_values", patches["c1"])
 
 
 if __name__ == "__main__":

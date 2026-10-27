@@ -26,6 +26,8 @@ import sys
 import time
 import unicodedata
 import urllib.error
+import zipfile
+import io
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -726,11 +728,39 @@ def http_json(url, headers=None, body=None, tries=3):
             raise
 
 
+def http_post_image(url, headers, file, tries=3):
+    """POST an image file. Returns (status, headers with lowercase names, body).
+    422 (no card in the photo) comes back as a result, not an exception."""
+    data = Path(file).read_bytes()
+    ctype = {".png": "image/png", ".webp": "image/webp", ".heic": "image/heic"}.get(Path(file).suffix.lower(), "image/jpeg")
+    req = urllib.request.Request(url, data=data, method="POST",
+                                 headers={"User-Agent": "card-vault/2", "Content-Type": ctype, **(headers or {})})
+    for i in range(tries):
+        try:
+            with urllib.request.urlopen(req, timeout=120) as r:
+                return r.status, {k.lower(): v for k, v in r.headers.items()}, r.read()
+        except urllib.error.HTTPError as e:
+            if e.code in (401, 403):
+                raise Unauthorized(f"{e.code} {e.read(500).decode('utf-8', 'replace')}".strip())
+            if e.code == 422:
+                return 422, {k.lower(): v for k, v in e.headers.items()}, e.read()
+            if e.code in (429, 500, 502, 503, 504) and i + 1 < tries:
+                time.sleep(2 ** (i + 1))
+                continue
+            raise
+        except urllib.error.URLError:
+            if i + 1 < tries:
+                time.sleep(2 ** i)
+                continue
+            raise
+
+
 class Clients:
     """Thin API wrappers; tests swap the methods for canned responses."""
 
-    def __init__(self, cs_key, psa_token, get=http_json, pause=1.1, max_calls=CS_MAX_CALLS):
+    def __init__(self, cs_key, psa_token, get=http_json, pause=1.1, max_calls=CS_MAX_CALLS, post=None):
         self.cs_key, self.psa_token, self.get, self.pause, self.max_calls = cs_key, psa_token, get, pause, max_calls
+        self.post = post or http_post_image
         self.calls = {"cardsight": 0, "psa": 0}
 
     def _cs(self, path, params=None, body=None):
@@ -762,6 +792,24 @@ class Clients:
     def cs_title_search(self, q, period="1y"):
         r = self._cs("/v1/pricing/search", {"q": q, "listing_type": "auction", "period": period, "limit": 500})
         return (r or {}).get("results") or []
+
+    def _cs_image(self, path, params, file):
+        if self.calls["cardsight"] >= self.max_calls:
+            raise OutOfBudget()
+        self.calls["cardsight"] += 1
+        time.sleep(self.pause)
+        url = CS_HOST + path + ("?" + urllib.parse.urlencode(params) if params else "")
+        return self.post(url, {"X-API-Key": self.cs_key}, file)
+
+    def cs_identify(self, file):
+        status, _, body = self._cs_image("/v1/identify/card", None, file)
+        return json.loads(body.decode("utf-8")) if status == 200 and body else {}
+
+    def cs_cardmagic(self, file, slab):
+        """(status, headers, image bytes): the card straightened, squared and
+        color-corrected; a slab comes back whole with its label."""
+        return self._cs_image("/v1/cardmagic/process", {"graded": "slab" if slab else "card", "paddingPercent": 0,
+                                                         "longEdge": CLEAN_LONG_EDGE, "outputFormat": "jpeg"}, file)
 
     def psa_cert(self, cert):
         self.calls["psa"] += 1
@@ -968,6 +1016,178 @@ def value_patch(c, comp, today):
     return p
 
 
+# ---------------------------------------------------------------- photos
+# Card Magic turns David's phone photos into clean card images (straightened,
+# squared, color-corrected; a slab keeps its label). Identify reads the same
+# photo: the catalog card, and a slab's grade and cert. Identify only fills
+# fields left empty; where it disagrees with what David entered, or isn't
+# sure, he gets the question instead.
+
+PHOTO_MAX = 30  # photos per run, 2 CardSight requests each
+CLEAN_LONG_EDGE = 1400
+PHOTO_REASON = "Is this the card?"
+GRADERS = {"PSA", "BGS", "SGC", "CGC", "TAG"}
+
+
+def photos_needed(cards, limit=PHOTO_MAX):
+    """Cards whose photo hasn't been cleaned and read yet: owned first, newest first."""
+    todo = [c for c in cards if c.get("photo") and not c.get("photo_checked_at") and c.get("status") in ("owned", "sold")]
+    todo.sort(key=lambda c: str(c.get("created_at") or ""), reverse=True)
+    todo.sort(key=lambda c: c.get("status") != "owned")
+    return todo[:limit]
+
+
+def _set_name(k):
+    rel, maker = k.get("releaseName") or "", k.get("manufacturer") or ""
+    return rel if not maker or norm(maker) in norm(rel) else f"{maker} {rel}".strip()
+
+
+def identify_patch(card, res):
+    """Card fields from an Identify result. High confidence and consistent with
+    what David entered: fill the empty fields and take the catalog match.
+    Otherwise keep the reading for a one-tap question."""
+    dets = (res or {}).get("detections") or []
+    if not dets:
+        return {}
+    d, patch = dets[0], {}
+    gr = d.get("grading") or {}
+    if gr.get("confidence") in ("High", "Medium"):
+        company = _company((gr.get("company") or {}).get("name"))
+        company = company if company in GRADERS else None
+        grade = _num((gr.get("grade") or {}).get("value"))
+        if company and not card.get("grader"):
+            patch["grader"] = company
+        if grade is not None and card.get("grade") is None:
+            patch["grade"] = grade
+        cert = re.sub(r"\D", "", str(gr.get("certNumber") or ""))
+        if cert and not card.get("cert"):
+            patch["cert"] = cert
+    k = d.get("card") or {}
+    if not k.get("id"):
+        return patch
+    sugg = (k.get("parallelSuggestions") or [{}])[0]
+    reading = {"id": k["id"], "name": k.get("name"), "number": k.get("number"), "year": k.get("year"),
+               "set": _set_name(k), "subset": k.get("setName"), "release": k.get("releaseName"),
+               "serial": f"/{k['numberedTo']}" if k.get("numberedTo") else None,
+               "parallel": sugg.get("name") if sugg.get("confidence") == "High" else None,
+               "rc": any(norm(a) in ("rc", "rookie") for a in k.get("attributes") or []),
+               "auto": any("auto" in norm(a) for a in k.get("attributes") or []),
+               "confidence": d.get("confidence")}
+    patch["photo_reading"] = reading
+    player_ok = not card.get("player") or not k.get("name") or _names_ok(set(toks(k["name"])), card["player"]) \
+        or _names_ok(set(toks(card["player"])), k["name"])
+    number_ok = not card.get("number") or _num_key(card["number"]) == _num_key(k.get("number") or "")
+    year_ok = not card.get("year") or str(card["year"])[:4] == str(k.get("year") or "")[:4]
+    if d.get("confidence") == "High" and player_ok and number_ok and year_ok:
+        patch.update(photo_fields(card, reading))
+    elif card.get("needs_review") and card.get("review_reason") != PHOTO_REASON:
+        pass  # one question at a time; this reading stays on the card
+    elif not (player_ok and number_ok and year_ok) or not card.get("number") or not card.get("year"):
+        # A reading that disagrees, or one that would supply a missing number or year: ask.
+        patch.update({"needs_review": True, "review_reason": PHOTO_REASON})
+    return patch
+
+
+def photo_fields(card, reading):
+    """The fields a photo reading supplies, without touching anything David entered.
+    Also used by the page when he answers yes to "Is this the card?"."""
+    out = {}
+    for k in ("number", "year", "set", "serial", "parallel"):
+        if reading.get(k) and not card.get(k):
+            out[k] = reading[k]
+    if reading.get("name") and not card.get("player"):
+        out["player"] = reading["name"]
+    for k in ("rc", "auto"):
+        if reading.get(k) and not card.get(k):
+            out[k] = True
+    g = card.get("guide") or {}
+    if not g.get("id") and not (g.get("none") and not g.get("auto")):
+        out["guide"] = {"source": "cardsight", "id": reading["id"], "name": reading.get("name"), "number": reading.get("number"),
+                        "set": " ".join(x for x in (reading.get("year"), reading.get("release"), reading.get("subset")) if x) or None,
+                        "release": reading.get("release"), "subset": reading.get("subset"), "year": reading.get("year"),
+                        "confidence": 0.9, "via": "photo"}
+        if g.get("none"):
+            out["guide"].update({"none": {"__delete__": True}, "auto": {"__delete__": True}})
+    return out
+
+
+def photo_step(cards, cl, photo_dir, out_dir, today, errors, state):
+    """Clean and read each pending photo found in photo_dir (saved as <photo id>.<ext>).
+    Returns patches; cleaned images land in out_dir/photos/<card id>.jpg."""
+    patches = {}
+    if not photo_dir or not cl.cs_key or state["cs_off"]:
+        return patches
+    pdir, odir = Path(photo_dir), Path(out_dir) / "photos"
+    for c in photos_needed(cards):
+        src = next(iter(sorted(pdir.glob(f"{c['photo']}*"))), None)
+        if not src:
+            continue
+        notes = errors.setdefault(c["id"], [])
+        try:
+            reading = cl.cs_identify(src)
+            slab = bool(c.get("grader")) or any(d.get("grading") for d in (reading or {}).get("detections") or [])
+            status, headers, body = cl.cs_cardmagic(src, slab)
+        except Unauthorized:
+            state["cs_off"] = "cardsight_unauthorized"
+            break
+        except OutOfBudget:
+            notes.append("cardsight_budget")
+            break
+        except Exception as e:  # network; this photo waits for the next run
+            notes.append(f"photo_error:{type(e).__name__}")
+            continue
+        finally:
+            if not notes:
+                errors.pop(c["id"], None)
+        patch = identify_patch(c, reading)
+        patch["photo_checked_at"] = today
+        image = body if status == 200 else None
+        several = False
+        if image and "zip" in (headers.get("content-type") or ""):
+            # Several cards: often an open booklet read as two. The original photo shows it better.
+            with zipfile.ZipFile(io.BytesIO(image)) as z:
+                several = sum(1 for n in z.namelist() if re.fullmatch(r"card_\d+\.\w+", n)) > 1
+                first = next((n for n in sorted(z.namelist()) if re.fullmatch(r"card_0\.\w+", n)), None)
+                image = None if several or not first else z.read(first)
+        if image:
+            odir.mkdir(parents=True, exist_ok=True)
+            (odir / f"{c['id']}.jpg").write_bytes(image)
+            patch.update({"photo_kind": headers.get("x-cardmagic-subject") or ("slab" if slab else "card"), "photo_pending": True})
+        elif several:
+            patch["photo_error"] = "More than one card in the photo, so the original stays"
+        else:
+            patch["photo_error"] = "No card found in the photo" if status == 422 else f"Photo cleanup failed ({status})"
+        patches[c["id"]] = patch
+    return patches
+
+
+def attach_photos(out_dir, uploaded):
+    """After the session uploads out/photos/<card id>.jpg, put each new asset id
+    into that card's patch. A card whose upload didn't happen is left to retry."""
+    for f in sorted((Path(out_dir) / "cards").glob("*.json")):
+        patch = json.loads(f.read_text())
+        if not patch.pop("photo_pending", None):
+            continue
+        asset = uploaded.get(f.stem)
+        if asset:
+            patch["photo_clean"] = str(asset).rsplit("/", 1)[-1]
+        else:
+            for k in ("photo_checked_at", "photo_kind", "photo_reading"):
+                patch.pop(k, None)
+        f.write_text(json.dumps(patch, indent=1))
+
+
+def grade_values(data, card, today):
+    """For a raw card: what the same card sells for as a PSA 10 and PSA 9 in the
+    catalog sales already fetched (no extra calls). None when neither has sales."""
+    out = {}
+    for grade in (10, 9):
+        comp = comp_value(data or {}, {**card, "grader": "PSA", "grade": grade}, today)
+        if comp["cents"] is not None:
+            out[f"PSA {grade}"] = {"cents": comp["cents"], "n": comp["n"], "last": comp["last_sale"]}
+    return out or None
+
+
 # ---------------------------------------------------------------- portfolio
 
 def totals(cards):
@@ -1021,14 +1241,20 @@ def notify_decision(t, prev, up, down, new_reviews):
 
 # ---------------------------------------------------------------- run
 
-def run(cards, cl, today, prev=None):
+def run(cards, cl, today, prev=None, photo_dir=None, out_dir=".", photos_only=False):
     budget = {"psa": PSA_DAILY_BUDGET, "psa_off": None}
     state = {"cs_off": None if cl.cs_key else "cardsight_key_missing"}
     patches, errors, views = {}, {}, {}
     had_review = {c["id"] for c in cards if c.get("needs_review")}
 
+    # 0. Clean and read new photos first, so what they reveal is matched and priced this run
+    patches.update(photo_step(cards, cl, photo_dir, out_dir, today, errors, state))
+    if patches:
+        cards = [{**c, **{k: v for k, v in patches[c["id"]].items() if not (isinstance(v, dict) and v.get("__delete__"))}}
+                 if c["id"] in patches else c for c in cards]
+
     # 1. PSA check and catalog match, card by card
-    for c in cards:
+    for c in ([] if photos_only else cards):
         if c.get("status") != "owned":
             continue
         view, patch, notes = dict(c), {}, []
@@ -1036,9 +1262,9 @@ def run(cards, cl, today, prev=None):
         match_card(view, cl, patch, notes, state)
         views[c["id"]] = view
         if patch:
-            patches[c["id"]] = patch
+            patches.setdefault(c["id"], {}).update(patch)
         if notes:
-            errors[c["id"]] = notes
+            errors.setdefault(c["id"], []).extend(notes)
 
     # 2. Recent sales for every matched card, 100 per call
     priced = [v for v in views.values() if (v.get("guide") or {}).get("id")]
@@ -1126,6 +1352,10 @@ def run(cards, cl, today, prev=None):
             comp = comp_value({}, v, today, window_days=366, extra=titles)
         if not errors.get(v["id"]):
             errors.pop(v["id"], None)
+        if not v.get("grader") and g.get("id"):
+            gv = grade_values(bulk.get(g["id"]), v, today)
+            if gv != v.get("grade_values"):
+                patches.setdefault(v["id"], {})["grade_values"] = gv
         if not g.get("id") and comp["n"] == 0:
             continue  # no catalog card and no sales by title: nothing new to say
         vp = value_patch(v, comp, today)
@@ -1148,6 +1378,8 @@ def run(cards, cl, today, prev=None):
                       if m["id"] in patches and isinstance(patches[m["id"]].get("guide_candidates"), list)],
         "calls": dict(cl.calls), "errors": errors, "notify": notify, "notify_text": text,
         "missing_tokens": missing, "write_snapshot": t["priced"] > 0,
+        "photos": {"cleaned": sum(1 for p in patches.values() if p.get("photo_pending")),
+                   "unreadable": sum(1 for p in patches.values() if p.get("photo_error"))},
     }
     return patches, summary, {"date": today, **t}
 
@@ -1205,13 +1437,26 @@ def write_outputs(out, cards, patches, summary, snapshot):
 
 def main(argv=None):
     ap = argparse.ArgumentParser()
-    ap.add_argument("--cards", required=True)
-    ap.add_argument("--out", required=True)
+    ap.add_argument("--cards")
+    ap.add_argument("--out")
     ap.add_argument("--prev-snapshot")
     ap.add_argument("--versions", help="ArtifactData listing text (or JSON map) giving each card's version")
     ap.add_argument("--today", default=dt.date.today().isoformat())
+    ap.add_argument("--photo-dir", help="folder holding the downloaded photos listed by --list-photos")
+    ap.add_argument("--list-photos", action="store_true", help="print the cards whose photo needs cleaning, then stop")
+    ap.add_argument("--photos-only", action="store_true", help="clean and read photos; skip matching and prices")
+    ap.add_argument("--attach-photos", help="JSON map of card id to uploaded asset id; adds photo_clean to the patches in --out, then stop")
     a = ap.parse_args(argv)
+    if not (a.cards or a.attach_photos) or not (a.out or a.list_photos):
+        ap.error("--cards and --out are needed (only --out with --attach-photos, only --cards with --list-photos)")
+    if a.attach_photos:
+        attach_photos(a.out, json.loads(Path(a.attach_photos).read_text()))
+        print(json.dumps({"attached": True}))
+        return
     cards = load_docs(a.cards)
+    if a.list_photos:
+        print(json.dumps([{"card_id": c["id"], "photo": c["photo"]} for c in photos_needed(cards)], indent=1))
+        return
     if a.versions:
         vers = load_versions(a.versions)
         for c in cards:
@@ -1221,7 +1466,7 @@ def main(argv=None):
             print(f"warning: no version for {len(missing)} cards: {missing[:5]}", file=sys.stderr)
     prev = load_doc(a.prev_snapshot) if a.prev_snapshot and Path(a.prev_snapshot).is_file() else None
     cl = Clients(os.environ.get("CARDSIGHT_API_KEY"), os.environ.get("PSA_TOKEN"))
-    patches, summary, snapshot = run(cards, cl, a.today, prev)
+    patches, summary, snapshot = run(cards, cl, a.today, prev, photo_dir=a.photo_dir, out_dir=a.out, photos_only=a.photos_only)
     batches = write_outputs(a.out, cards, patches, summary, snapshot)
     print(json.dumps({"cards": len(cards), "patched": len(patches), "batches": len(batches),
                       "notify": summary["notify"], "notify_text": summary["notify_text"],

@@ -12,6 +12,7 @@ Card Vault, a private sports card tracker. Live page: https://claude.ai/artifact
 | Show, shop and trade cards | Add card, snap a photo, Claude fills the fields | About 15 seconds |
 | Values | Scheduled task, Sundays 7:37 AM ET: PSA cert check, CardSight match, value from recent sold prices, weekly snapshot | None |
 | Sales data match not certain, or parallel unclear | Shows under "Needs a tap" with the choices | One tap |
+| Card photos | Same weekly run: CardSight Card Magic straightens and squares each new photo (slabs keep the whole slab and label), and Identify fills empty fields | None, or one tap on "Is this the card?" |
 
 Deleting a card records its eBay order and sale in `meta/sync.dismissed`, so no later sync or re-read adds it back. Gmail search returns at most 50 emails per query, so sync reads history in 90 day windows and splits any window that fills up.
 
@@ -38,5 +39,6 @@ Deleting a card records its eBay order and sale in `meta/sync.dismissed`, so no 
 - Coverage: only completed auctions count, so low volume cards (numbered refractors, older inserts) often show "No sales in the last year" instead of a number. When 6 months is empty the job looks back 12 months before giving up.
 - Matching: CardSight splits each release into sub-sets that share card numbers. A clear match is taken automatically; close calls (sister products like Chrome vs Chrome Sapphire, variations like #301 vs #301V, auto vs non-auto sub-sets) go to "Needs a tap". Cards CardSight doesn't carry are marked "no sales data" without asking.
 - CardSight lists some cards twice (2020 Prizm #307 Burrow has two catalog entries); title search picks up sales filed under either. Sister products that share a player and number (the 2003 Upper Deck LeBron box set vs Phenomenal Beginning) are learned once per card and kept in `guide.rivals`.
+- Photos: up to 30 new photos a run, 2 CardSight calls each. The original photo is never deleted; the cleaned copy is stored as `photo_clean`. A photo with more than one card in it (booklets) keeps the original. Identify only fills fields you left empty, and only fills card details on a High confidence read that agrees with your player, number and year; any other read goes to "Is this the card?". Slab labels (grader, grade, cert) fill at High or Medium.
 - Call budget: about 200 one time catalog lookups, then each week 2 bulk calls, up to 40 deeper single card pulls and up to 60 title searches (2 per thin card at most). Usage is at `GET /v1/subscription/` (calendar month). Cap per run: `CARDSIGHT_MAX_CALLS` (default 150).
 - Your CardSight key returns sales data (tested Oct 26). If it is ever turned down, the page says so; the $14.95 plan raises the call limit.
