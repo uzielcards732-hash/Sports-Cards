@@ -730,7 +730,7 @@ main.wrap { margin: 0; width: 100%; max-width: none; }
     const msg = missing.includes("cardsight_key_missing")
       ? ["Prices are paused. ", "Add CARDSIGHT_API_KEY to the cloud environment's variables and allow api.cardsight.ai; the next run picks it up."]
       : missing.includes("cardsight_unauthorized")
-        ? ["Prices are paused. ", "CardSight turned the key down. Check the key, or whether your CardSight plan includes sales data."]
+        ? ["Prices are paused. ", "CardSight refused the key. Most often this means the month's free API calls are used up; they reset on the 1st. If it continues after that, check the key or the plan."]
         : missing.includes("psa_unauthorized")
           ? ["PSA turned the token down. ", "Prices still update. Generate a new token at psacard.com/publicapi and replace PSA_TOKEN in the cloud environment's variables."]
           : missing.includes("psa_token_missing")
@@ -758,7 +758,12 @@ main.wrap { margin: 0; width: 100%; max-width: none; }
     const t = totals();
     const job = S.job || {};
     $("#h-value").textContent = usd(t.value, true);
-    $("#as-of").textContent = job.last_run ? "· as of " + fmtDate(job.last_run) : "";
+    // Change since the previous weekly snapshot, in words; a line needs more weeks than this.
+    const pts = S.snaps.filter((x) => x.value_cents != null);
+    const [prev, last] = pts.slice(-2);
+    const delta = pts.length >= 2 ? last.value_cents - prev.value_cents : null;
+    const move = delta == null ? "" : delta === 0 ? ` · unchanged since ${fmtDate(prev.date)}` : ` · ${delta > 0 ? "up" : "down"} ${usd(Math.abs(delta))} since ${fmtDate(prev.date)}`;
+    $("#as-of").textContent = (job.last_run ? "· as of " + fmtDate(job.last_run) : "") + move;
     $("#h-note").textContent = t.count
       ? `${t.priced} of ${t.count} owned cards priced, each at the median of its recent sold prices at the same grade.`
       : "Sync eBay or add a card to see what your collection is worth.";
@@ -784,12 +789,15 @@ main.wrap { margin: 0; width: 100%; max-width: none; }
     line.hidden = !parts.length;
   }
 
+  const CHART_MIN = 6;
   function renderChart() {
     const box = $("#chart"), wrap = $("#chart-wrap");
     const pts = S.snaps.filter((s) => s.value_cents != null);
-    wrap.hidden = pts.length < 2;
-    $("#hero").classList.toggle("has-chart", pts.length >= 2);
-    if (pts.length < 2) { box.replaceChildren(); return; }
+    // Two or three weekly points draw a meaningless line; wait for about six weeks.
+    const enough = pts.length >= CHART_MIN;
+    wrap.hidden = !enough;
+    $("#hero").classList.toggle("has-chart", enough);
+    if (!enough) { box.replaceChildren(); return; }
     const showCost = totals().showCost && pts.some((p) => p.cost_cents);
     const W = Math.max(280, box.clientWidth || 420), H = 140, padL = 4, padR = 4, padT = 14, padB = 20;
     const vals = pts.flatMap((p) => [p.value_cents, showCost ? p.cost_cents : null].filter((v) => v != null));
@@ -1036,7 +1044,7 @@ main.wrap { margin: 0; width: 100%; max-width: none; }
     if (c.value_prev_cents && c.value_prev_cents !== c.value_cents) extra.push(`${signed(c.value_cents - c.value_prev_cents)} since last update`);
     if (c.cost_cents != null) extra.push(`Paid ${usd(c.cost_cents)}, ${signed(c.value_cents - c.cost_cents)}`);
     if (extra.length) p.append(el("div", { class: "note num", style: "font-size:13px", text: extra.join(" · ") }));
-    if (Array.isArray(c.history) && c.history.length > 1) p.append(sparkline(c.history));
+    if (Array.isArray(c.history) && c.history.length >= CHART_MIN) p.append(sparkline(c.history));
     if (sales.length) {
       p.append(el("h3", { class: "h3", style: "margin-top:10px", text: "Sales behind this value" }),
         el("div", { class: "tablewrap" }, el("table", { class: "sales" }, el("tbody", {}, sales.slice().sort((a, b) => String(b.date).localeCompare(String(a.date))).map((s) =>
