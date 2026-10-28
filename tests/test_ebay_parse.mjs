@@ -137,4 +137,23 @@ test("sale never links to a different player's card on shared brand words", () =
   assert.equal(P.matchSale(same, owned).card.id, "ace");
 });
 
+test("listing photo: matched by item id, recommendations dropped", () => {
+  const imgs = P.imagesFromHtml(fx("purchase_images.html"));
+  assert.deepEqual(Object.keys(imgs).sort(), ["206287618817", "366314150356"]);
+  assert.equal(imgs["206287618817"].url, "https://i.ebayimg.com/images/g/UFQAAeSwo1lqDgiL/s-l1600.jpg");
+  assert.equal(imgs["206287618817"].fallback, "https://i.ebayimg.com/00/s/MTYwMFgxNjAw/z/UFQAAeSwo1lqDgiL/$_1.JPG");
+  const msg = { id: "m1", subject: "Order confirmed: Battier", date: "2026-05-22T00:00:00Z", plaintextBody: fx("purchase_single.txt"), images: { "366546977670": { url: "https://i.ebayimg.com/images/g/K/s-l1600.jpg" }, "1": { url: "x" } } };
+  const ev = P.parseMessage(msg);
+  assert.equal(ev.items[0].image_url, "https://i.ebayimg.com/images/g/K/s-l1600.jpg");
+  const other = P.parseMessage({ ...msg, images: { "366314150356": { url: "rec" } } });
+  assert.equal(other.items[0].image_url, undefined);
+});
+
+test("listing photo: sale link with itemid, image outside a link ignored", () => {
+  const html = `<a href="https://www.ebay.com/mesh/ord/details?mode=SH&itemid=398241806343&orderid=1"><img src="https://i.ebayimg.com/images/g/AbC/s-l225.jpg"></a><img src="https://i.ebayimg.com/images/g/Zz/s-l225.jpg">`;
+  const imgs = P.imagesFromHtml(html);
+  assert.deepEqual(Object.keys(imgs), ["398241806343"]);
+  assert.equal(imgs["398241806343"].url, "https://i.ebayimg.com/images/g/AbC/s-l1600.jpg");
+});
+
 console.log(`\n${passed} passed`);

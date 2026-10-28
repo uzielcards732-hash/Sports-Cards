@@ -487,7 +487,7 @@ main.wrap { margin: 0; width: 100%; max-width: none; }
 </aside>
 <div class="toast" id="toast" role="status" hidden></div>
 
-<script src="ebay-parse.js?v=3"></script>
+<script src="ebay-parse.js?v=4"></script>
 <script>
 (function () {
   "use strict";
@@ -907,7 +907,7 @@ main.wrap { margin: 0; width: 100%; max-width: none; }
         el("h3", { text: none ? "No cards yet" : "Nothing here" }),
         el("p", { text: none ? (S.mcp ? "Sync eBay to pull every card purchase and sale from your Gmail, with what you paid. Cards from shows or trades: tap Add card and snap a photo." : "Tap Add card and snap a photo. Claude reads the card and fills in the details.") : "No cards match this view." }),
         none ? el("div", { class: "actions" },
-          S.mcp ? el("button", { class: "btn primary", type: "button", text: "Sync eBay", on: { click: () => syncEbay({ manual: true }) } }) : null,
+          S.mcp ? el("button", { class: "btn primary", type: "button", text: "Sync eBay", on: { click: () => syncEbay({ manual: true }).then(fillListingPhotos) } }) : null,
           el("button", { class: "btn", type: "button", text: "Add card", on: { click: () => openCard(null) } })) : null));
       return;
     }
@@ -954,6 +954,8 @@ main.wrap { margin: 0; width: 100%; max-width: none; }
     }
     const media = el("div", { class: "cp-media" }, faceFor(c, { big: true, original: S.showOriginal && !!c.photo }));
     if (c.photo_clean && c.photo) media.append(el("button", { class: "btn small", type: "button", text: S.showOriginal ? "Show the cleaned photo" : "Show the original photo", on: { click: () => { S.showOriginal = !S.showOriginal; schedule(); } } }));
+    if (c.photo_source === "ebay") media.append(el("div", { class: "note", text: "Photo from the eBay listing." }));
+    else if (!c.photo && c.listing_image_url) media.append(el("div", { class: "note", text: "The eBay listing photo arrives with the next weekly update." }));
     if (c.photo_error) media.append(el("div", { class: "note", text: c.photo_error + "." }));
     else if (c.photo && !c.photo_clean && !c.photo_checked_at) media.append(el("div", { class: "note", text: "The next weekly update straightens and crops this photo." }));
 
@@ -1671,6 +1673,40 @@ ${chunk.map((x) => x.id + "\t" + x.title.replace(/\s+/g, " ")).join("\n")}`;
     }
   }
 
+  // Listing photos: the photo eBay showed in the order or sale email, found by
+  // item id in the email's HTML. Read once per card, in the background after a
+  // sync; the weekly job downloads and cleans it (the page can't load eBay images).
+  const LISTING_BATCH = 40;
+  async function fillListingPhotos() {
+    if (!S.mcp || !S.db || S.listing) return;
+    const todo = [...S.cards.values()].filter((c) => !c.photo && !c.listing_image_url && !c.listing_image_checked)
+      .map((c) => ({ c, src: c.ebay && c.ebay.msg_id && c.ebay.item_id ? c.ebay : c.sold && c.sold.msg_id && c.sold.item_id ? c.sold : null }))
+      .filter((x) => x.src)
+      .sort((a, b) => (a.c.status === "owned" ? 0 : 1) - (b.c.status === "owned" ? 0 : 1))
+      .slice(0, LISTING_BATCH);
+    if (!todo.length) return;
+    S.listing = true;
+    const cache = new Map();
+    let found = 0;
+    try {
+      for (const { c, src } of todo) {
+        let imgs = cache.get(src.msg_id);
+        if (!imgs) {
+          let msg;
+          try { msg = await gmail("get_message", { messageId: src.msg_id, messageFormat: "FULL_CONTENT" }); }
+          catch (e) { console.warn("listing photo: email not read", src.msg_id, e); break; } // quota or connection: next sync carries on
+          imgs = P.imagesFromHtml(msg && msg.htmlBody);
+          cache.set(src.msg_id, imgs);
+        }
+        const hit = imgs[src.item_id];
+        await patchCard(c.id, hit ? { listing_image_url: hit.url, listing_image_fallback: hit.fallback, listing_image_checked: today() } : { listing_image_checked: today() });
+        if (hit) found++;
+      }
+      if (found) console.info(`listing photos found for ${found} cards`);
+    } catch (e) { console.error("listing photos", e); }
+    finally { S.listing = false; }
+  }
+
   // ---------------------------------------------------------------- other actions
   async function refreshPrices() {
     const b = $("#btn-refresh"); b.disabled = true;
@@ -1707,7 +1743,7 @@ ${chunk.map((x) => x.id + "\t" + x.title.replace(/\s+/g, " ")).join("\n")}`;
   }
   window.addEventListener("hashchange", route);
   $("#btn-add").addEventListener("click", () => openCard(null));
-  $("#btn-sync").addEventListener("click", () => syncEbay({ manual: true }));
+  $("#btn-sync").addEventListener("click", () => syncEbay({ manual: true }).then(fillListingPhotos));
   $("#btn-refresh").addEventListener("click", refreshPrices);
   $("#btn-export").addEventListener("click", exportCsv);
   $("#d-close").addEventListener("click", closeDrawer);
@@ -1755,7 +1791,8 @@ ${chunk.map((x) => x.id + "\t" + x.title.replace(/\s+/g, " ")).join("\n")}`;
     await waitForMeta();
     const last = S.sync && S.sync.gmail_last ? Date.parse(S.sync.gmail_last) : 0;
     const outdated = ((S.sync && S.sync.parser_version) || 1) < PARSER_VERSION;
-    if (st === "granted" && last && (outdated || Date.now() - last > 6 * 3600e3)) syncEbay({ manual: false });
+    if (st === "granted" && last && (outdated || Date.now() - last > 6 * 3600e3)) syncEbay({ manual: false }).then(fillListingPhotos);
+    else if (st === "granted") fillListingPhotos();
   }
 
   boot();

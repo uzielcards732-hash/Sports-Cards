@@ -759,6 +759,50 @@ class Photos(unittest.TestCase):
         self.assertEqual(json.loads((out / "cards" / "m3.json").read_text()), {"value_cents": 5})
 
 
+class ListingPhotos(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_fetch_tries_full_size_then_the_email_size_and_marks_gone(self):
+        cards = [card(id="a", status="owned", photo=None, listing_image_url="https://i.ebayimg.com/images/g/A/s-l1600.jpg", listing_image_fallback="https://i.ebayimg.com/00/s/x/z/A/$_1.JPG"),
+                 card(id="b", status="sold", photo=None, listing_image_url="https://i.ebayimg.com/images/g/B/s-l1600.jpg"),
+                 card(id="c", status="owned", photo="mine", listing_image_url="https://i.ebayimg.com/images/g/C/s-l1600.jpg")]
+        seen = []
+        def get(url):
+            seen.append(url)
+            return (404, None) if "s-l1600" in url else (200, b"\xff\xd8\xff jpeg")
+        res = R.fetch_listing_photos(cards, self.dir / "listing", get=get)
+        self.assertEqual(res["fetched"], ["a"])
+        self.assertEqual(res["gone"], {"b": 404})
+        self.assertNotIn("https://i.ebayimg.com/images/g/C/s-l1600.jpg", seen)  # has its own photo
+        self.assertTrue((self.dir / "listing" / "a.jpg").is_file())
+
+    def test_blocked_host_stops_without_marking_anything(self):
+        cards = [card(id="a", photo=None, listing_image_url="https://i.ebayimg.com/images/g/A/s-l1600.jpg")]
+        res = R.fetch_listing_photos(cards, self.dir / "listing", get=lambda url: (None, None))
+        self.assertTrue(res["blocked"])
+        self.assertEqual(res["gone"], {})
+
+    def test_uploaded_listing_photo_becomes_the_photo_and_is_cleaned_without_identify(self):
+        ldir = self.dir / "listing"
+        ldir.mkdir()
+        (ldir / "a.jpg").write_bytes(b"\xff\xd8\xff jpeg")
+        (ldir / "fetch.json").write_text(json.dumps({"fetched": ["a"], "gone": {"b": 404}, "blocked": False}))
+        cards = [card(id="a", photo=None, grader=None, grade=None, listing_image_url="u"), card(id="b", status="sold", photo=None, listing_image_url="v")]
+        cl = FakeClients(readings={"asset1": reading()})
+        patches, _, _ = R.run(cards, cl, TODAY, out_dir=self.dir / "out", listing_dir=ldir, listing_uploaded={"a": "asset1"})
+        p = patches["a"]
+        self.assertEqual((p["photo"], p["photo_source"]), ("asset1", "ebay"))
+        self.assertTrue(p["photo_pending"])
+        self.assertEqual(cl.magic_calls, [("asset1", False)])
+        self.assertNotIn("photo_reading", p)  # Identify skipped
+        self.assertEqual(patches["b"]["listing_image_error"], "Listing photo no longer on eBay (404)")
+
+
 class GradeValues(unittest.TestCase):
     def test_raw_card_gets_psa_10_and_9_from_the_same_sales(self):
         raw = card(parallel="Purple Shock", grader=None, grade=None, guide={"id": "g", "subset": "Base Set", "rivals": []})

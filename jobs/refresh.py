@@ -1124,7 +1124,8 @@ def photo_step(cards, cl, photo_dir, out_dir, today, errors, state):
             continue
         notes = errors.setdefault(c["id"], [])
         try:
-            reading = cl.cs_identify(src)
+            # A listing photo's card is already described by the listing title: clean it only.
+            reading = None if c.get("photo_source") == "ebay" else cl.cs_identify(src)
             slab = bool(c.get("grader")) or any(d.get("grading") for d in (reading or {}).get("detections") or [])
             status, headers, body = cl.cs_cardmagic(src, slab)
         except Unauthorized:
@@ -1158,6 +1159,77 @@ def photo_step(cards, cl, photo_dir, out_dir, today, errors, state):
         else:
             patch["photo_error"] = "No card found in the photo" if status == 422 else f"Photo cleanup failed ({status})"
         patches[c["id"]] = patch
+    return patches
+
+
+LISTING_MAX = 30  # eBay listing photos fetched per run (no CardSight calls; cleanup is 1 call each)
+
+
+def listing_needed(cards, limit=LISTING_MAX):
+    """Cards with an eBay listing photo found by the page and no photo of their own yet."""
+    todo = [c for c in cards if c.get("listing_image_url") and not c.get("photo") and not c.get("listing_image_error")
+            and c.get("status") in ("owned", "sold")]
+    todo.sort(key=lambda c: c.get("status") != "owned")
+    return todo[:limit]
+
+
+def fetch_listing_photos(cards, dest, get=None):
+    """Download each listing photo (full size, else the email's own size) to dest/<card id>.jpg.
+    Returns {"fetched": [...], "gone": {id: status}, "blocked": bool}."""
+    get = get or _get_bytes
+    dest = Path(dest)
+    dest.mkdir(parents=True, exist_ok=True)
+    out = {"fetched": [], "gone": {}, "blocked": False}
+    for c in listing_needed(cards):
+        status = None
+        for url in dict.fromkeys(u for u in (c.get("listing_image_url"), c.get("listing_image_fallback")) if u):
+            status, body = get(url)
+            if status == 200 and body and (body[:3] == b"\xff\xd8\xff" or body[:4] in (b"\x89PNG", b"RIFF")):
+                (dest / f"{c['id']}.jpg").write_bytes(body)
+                out["fetched"].append(c["id"])
+                break
+        else:
+            if status is None:  # host refused (network policy): stop, nothing else will get through
+                out["blocked"] = True
+                break
+            if status in (404, 410):
+                out["gone"][c["id"]] = status
+    (dest / "fetch.json").write_text(json.dumps(out, indent=1))
+    return out
+
+
+def _get_bytes(url, tries=2):
+    for i in range(tries):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "card-vault/2"})
+            with urllib.request.urlopen(req, timeout=30) as r:
+                return r.status, r.read()
+        except urllib.error.HTTPError as e:
+            if e.code in (404, 410) or i == tries - 1:
+                return e.code, None
+        except (urllib.error.URLError, OSError):
+            if i == tries - 1:
+                return None, None
+        time.sleep(1.5)
+    return None, None
+
+
+def listing_patches(listing_dir, uploaded, photo_dir):
+    """Patches that make each uploaded listing photo the card's photo, and copies of
+    the files into photo_dir under their asset ids so this run's photo step cleans them."""
+    patches = {}
+    ldir = Path(listing_dir)
+    fetch = json.loads((ldir / "fetch.json").read_text()) if (ldir / "fetch.json").is_file() else {}
+    Path(photo_dir).mkdir(parents=True, exist_ok=True)
+    for cid, asset in (uploaded or {}).items():
+        src = ldir / f"{cid}.jpg"
+        asset = str(asset).rsplit("/", 1)[-1]
+        if not src.is_file() or not asset:
+            continue
+        (Path(photo_dir) / f"{asset}.jpg").write_bytes(src.read_bytes())
+        patches[cid] = {"photo": asset, "photo_source": "ebay"}
+    for cid, status in (fetch.get("gone") or {}).items():
+        patches.setdefault(cid, {})["listing_image_error"] = f"Listing photo no longer on eBay ({status})"
     return patches
 
 
@@ -1241,14 +1313,21 @@ def notify_decision(t, prev, up, down, new_reviews):
 
 # ---------------------------------------------------------------- run
 
-def run(cards, cl, today, prev=None, photo_dir=None, out_dir=".", photos_only=False):
+def run(cards, cl, today, prev=None, photo_dir=None, out_dir=".", photos_only=False, listing_dir=None, listing_uploaded=None):
     budget = {"psa": PSA_DAILY_BUDGET, "psa_off": None}
     state = {"cs_off": None if cl.cs_key else "cardsight_key_missing"}
     patches, errors, views = {}, {}, {}
     had_review = {c["id"] for c in cards if c.get("needs_review")}
 
+    # 0a. eBay listing photos uploaded this run become the card's photo, then get cleaned below
+    if listing_dir:
+        photo_dir = photo_dir or str(Path(out_dir) / "listing_in")
+        patches.update(listing_patches(listing_dir, listing_uploaded, photo_dir))
+        cards = [{**c, **patches[c["id"]]} if c["id"] in patches else c for c in cards]
+
     # 0. Clean and read new photos first, so what they reveal is matched and priced this run
-    patches.update(photo_step(cards, cl, photo_dir, out_dir, today, errors, state))
+    for cid, p in photo_step(cards, cl, photo_dir, out_dir, today, errors, state).items():
+        patches.setdefault(cid, {}).update(p)
     if patches:
         cards = [{**c, **{k: v for k, v in patches[c["id"]].items() if not (isinstance(v, dict) and v.get("__delete__"))}}
                  if c["id"] in patches else c for c in cards]
@@ -1446,14 +1525,21 @@ def main(argv=None):
     ap.add_argument("--list-photos", action="store_true", help="print the cards whose photo needs cleaning, then stop")
     ap.add_argument("--photos-only", action="store_true", help="clean and read photos; skip matching and prices")
     ap.add_argument("--attach-photos", help="JSON map of card id to uploaded asset id; adds photo_clean to the patches in --out, then stop")
+    ap.add_argument("--fetch-listing-photos", metavar="DIR", help="download eBay listing photos for cards that need one into DIR, then stop")
+    ap.add_argument("--listing-dir", help="the DIR given to --fetch-listing-photos, for a run that attaches them")
+    ap.add_argument("--listing-uploaded", help="JSON map of card id to the asset id of its uploaded listing photo")
     a = ap.parse_args(argv)
-    if not (a.cards or a.attach_photos) or not (a.out or a.list_photos):
-        ap.error("--cards and --out are needed (only --out with --attach-photos, only --cards with --list-photos)")
+    if not (a.cards or a.attach_photos) or not (a.out or a.list_photos or a.fetch_listing_photos):
+        ap.error("--cards and --out are needed (only --out with --attach-photos, only --cards with --list-photos or --fetch-listing-photos)")
     if a.attach_photos:
         attach_photos(a.out, json.loads(Path(a.attach_photos).read_text()))
         print(json.dumps({"attached": True}))
         return
     cards = load_docs(a.cards)
+    if a.fetch_listing_photos:
+        res = fetch_listing_photos(cards, a.fetch_listing_photos)
+        print(json.dumps({"fetched": len(res["fetched"]), "gone": len(res["gone"]), "blocked": res["blocked"]}))
+        return
     if a.list_photos:
         print(json.dumps([{"card_id": c["id"], "photo": c["photo"]} for c in photos_needed(cards)], indent=1))
         return
@@ -1466,7 +1552,9 @@ def main(argv=None):
             print(f"warning: no version for {len(missing)} cards: {missing[:5]}", file=sys.stderr)
     prev = load_doc(a.prev_snapshot) if a.prev_snapshot and Path(a.prev_snapshot).is_file() else None
     cl = Clients(os.environ.get("CARDSIGHT_API_KEY"), os.environ.get("PSA_TOKEN"))
-    patches, summary, snapshot = run(cards, cl, a.today, prev, photo_dir=a.photo_dir, out_dir=a.out, photos_only=a.photos_only)
+    patches, summary, snapshot = run(cards, cl, a.today, prev, photo_dir=a.photo_dir, out_dir=a.out, photos_only=a.photos_only,
+                                   listing_dir=a.listing_dir,
+                                   listing_uploaded=json.loads(Path(a.listing_uploaded).read_text()) if a.listing_uploaded else None)
     batches = write_outputs(a.out, cards, patches, summary, snapshot)
     print(json.dumps({"cards": len(cards), "patched": len(patches), "batches": len(batches),
                       "notify": summary["notify"], "notify_text": summary["notify_text"],

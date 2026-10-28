@@ -204,21 +204,61 @@
     return best && best.score >= 0.75 ? best : null;
   }
 
+  // ---- listing photos -------------------------------------------------
+
+  // Item photos in an email's HTML, keyed by item id. eBay wraps each image in
+  // its image proxy (imageUrl=<i.ebayimg.com url>) inside the link to the item.
+  // Recommendations carry their own item ids, so callers keep only their items'.
+  // The returned url is the full size version of the same photo.
+  function imagesFromHtml(html) {
+    const out = {};
+    const h = String(html || "");
+    const unesc = (s) => s.replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+    const re = /<img\b[^>]*\bsrc="([^"]+)"[^>]*>/gi;
+    let m;
+    while ((m = re.exec(h))) {
+      let src = unesc(m[1]);
+      if (/imageser/.test(src)) {
+        const q = src.match(/[?&]imageUrl=([^&]+)/);
+        if (!q) continue;
+        try { src = decodeURIComponent(q[1]); } catch (e) { continue; }
+      }
+      if (!/^https:\/\/i\.ebayimg\.com\//.test(src)) continue;
+      const a = h.lastIndexOf("<a ", m.index);
+      const close = h.lastIndexOf("</a>", m.index);
+      if (a < 0 || close > a) continue; // the image must sit inside a link
+      const href = unesc((h.slice(a, m.index).match(/href="([^"]+)"/) || [])[1] || "");
+      const id = (href.match(/\/itm\/(?:[^/?"]+\/)?(\d{9,})/) || href.match(/[?&]itemid=(\d{9,})/i) || [])[1];
+      if (!id || out[id]) continue;
+      const key = (src.match(/\/z\/([^/]+)\//) || src.match(/\/images\/g\/([^/]+)\//) || [])[1];
+      out[id] = { url: key ? `https://i.ebayimg.com/images/g/${key}/s-l1600.jpg` : src.replace(/\?.*$/, ""), fallback: src.replace(/\?.*$/, "") };
+    }
+    return out;
+  }
+
   // ---- whole-message entry point --------------------------------------
 
   function parseMessage(msg) {
     const kind = classify(msg.subject);
     const date = ymdFromIso(msg.date);
-    if (kind === "purchase") return { kind, id: msg.id, date, ...parsePurchase(msg.plaintextBody) };
-    if (kind === "sale") { const s = parseSale(msg.plaintextBody, msg.subject); return { kind, id: msg.id, ...s, date: s.date || date }; }
+    const imgs = msg.images || (msg.htmlBody ? imagesFromHtml(msg.htmlBody) : {});
+    if (kind === "purchase") {
+      const p = parsePurchase(msg.plaintextBody);
+      for (const it of p.items) if (it.item_id && imgs[it.item_id]) it.image_url = imgs[it.item_id].url;
+      return { kind, id: msg.id, date, ...p };
+    }
+    if (kind === "sale") {
+      const s = parseSale(msg.plaintextBody, msg.subject);
+      return { kind, id: msg.id, ...s, image_url: (s.item_id && imgs[s.item_id] && imgs[s.item_id].url) || null, date: s.date || date };
+    }
     if (kind === "refund") return { kind, id: msg.id, date, ...parseRefund(msg.subject) };
     return { kind: null, id: msg.id };
   }
 
   // Bumped with every change to how emails are read; the page re-reads eBay
   // history once when its own PARSER_VERSION is newer than the last sync's.
-  const VERSION = 3;
-  const api = { VERSION, classify, looksLikeCard, parseTitle, parsePurchase, parseSale, parseRefund, parseMessage, matchSale, rankForSale, samePlayer, containment, cents };
+  const VERSION = 4;
+  const api = { VERSION, classify, imagesFromHtml, looksLikeCard, parseTitle, parsePurchase, parseSale, parseRefund, parseMessage, matchSale, rankForSale, samePlayer, containment, cents };
   if (typeof module === "object" && module.exports) module.exports = api;
   else root.EbayParse = api;
 })(typeof window !== "undefined" ? window : globalThis);
